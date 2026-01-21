@@ -1,0 +1,158 @@
+.dashboard {
+  padding: 2rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.summary-card {
+  background: white;
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.summary-label {
+  font-size: 0.9rem;
+  color: #5f6368;
+  margin-bottom: 0.5rem;
+}
+
+.summary-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #202124;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: #5f6368;
+}
+
+.empty-state p {
+  margin-bottom: 0.5rem;
+}
+
+.empty-hint {
+  font-size: 0.9rem;
+  color: #80868b;
+}
+
+.workplace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.workplace-item {
+  border: 1px solid #e8eaed;
+  border-radius: 8px;
+  padding: 1.5rem;
+  transition: box-shadow 0.2s;
+}
+
+.workplace-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.workplace-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #e8eaed;
+}
+
+.workplace-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.workplace-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.workplace-info h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #202124;
+}
+
+.workplace-total {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #4285f4;
+}
+
+.workplace-details {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.95rem;
+}
+
+.detail-row span:first-child {
+  color: #5f6368;
+}
+
+.detail-row span:last-child {
+  font-weight: 500;
+  color: #202124;
+}
+
+.extra-pay {
+  color: #34a853 !important;
+}
+
+.tax {
+  color: #ea4335 !important;
+}
+
+.warnings {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e8eaed;
+}
+
+.warning-item {
+  font-size: 0.9rem;
+  color: #f29900;
+  padding: 0.5rem 0.75rem;
+  background: #fef7e0;
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+}
+
+@media (max-width: 768px) {
+  .dashboard {
+    padding: 1rem;
+  }
+
+  .summary-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .summary-value {
+    font-size: 1.5rem;
+  }
+
+  .workplace-total {
+    font-size: 1.25rem;
+  }
+}
