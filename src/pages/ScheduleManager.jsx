@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useWorkplaceStore } from '../store/workplaceStore'
 import { useScheduleStore } from '../store/scheduleStore'
-import { analyzeScheduleImage } from '../api/gemini'
+import { analyzeScheduleImage, getAvailableGeminiModels } from '../api/gemini'
 import {
   calculateBreakMinutes,
   calculateWorkMinutes,
@@ -17,6 +17,8 @@ function ScheduleManager() {
   const [formData, setFormData] = useState(getEmptyForm())
   const [imageFile, setImageFile] = useState(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [selectedDates, setSelectedDates] = useState([])
+  const [calendarMonth, setCalendarMonth] = useState(new Date())
 
   function getEmptyForm() {
     return {
@@ -32,7 +34,19 @@ function ScheduleManager() {
   const handleSubmit = async (e) => {
     e.preventDefault()
 
-    if (!formData.workplaceId || !formData.date || !formData.startTime || !formData.endTime) {
+    if (!formData.workplaceId || !formData.startTime || !formData.endTime) {
+      alert('모든 필수 항목을 입력해주세요.')
+      return
+    }
+
+    const hasSingleDate = Boolean(formData.date)
+
+    if (editingId && !hasSingleDate) {
+      alert('수정 시에는 날짜를 선택해주세요.')
+      return
+    }
+
+    if (!editingId && selectedDates.length === 0) {
       alert('모든 필수 항목을 입력해주세요.')
       return
     }
@@ -41,30 +55,64 @@ function ScheduleManager() {
       await updateSchedule(editingId, formData)
       setEditingId(null)
     } else {
-      const result = await addSchedule(formData)
-      if (!result?.sheetSaved) {
-        alert(`근무 기록 시트 저장 실패: ${result?.error || '알 수 없는 오류'}`)
-      } else if (!result?.calendarSaved) {
-        alert(`캘린더 추가 실패: ${result?.error || '알 수 없는 오류'}`)
-      } else if (result?.spreadsheetUrl) {
-        console.info('근무 기록 시트 저장 완료:', {
-          spreadsheetUrl: result.spreadsheetUrl,
-          updates: result.sheetUpdates,
+      const datesToAdd = selectedDates.slice().sort()
+      let failedSheetCount = 0
+      let failedCalendarCount = 0
+      let successCount = 0
+      let lastError = ''
+
+      for (const date of datesToAdd) {
+        const result = await addSchedule({
+          ...formData,
+          date,
+          source: 'manual',
         })
-        alert('근무 기록이 시트에 저장되었습니다.')
+        if (!result?.sheetSaved) {
+          failedSheetCount += 1
+          lastError = result?.error || lastError
+        } else if (!result?.calendarSaved) {
+          failedCalendarCount += 1
+          lastError = result?.error || lastError
+        } else {
+          successCount += 1
+        }
+      }
+
+      if (failedSheetCount > 0 || failedCalendarCount > 0) {
+        const errors = []
+        if (failedSheetCount > 0) {
+          errors.push(`시트 저장 실패 ${failedSheetCount}건`)
+        }
+        if (failedCalendarCount > 0) {
+          errors.push(`캘린더 추가 실패 ${failedCalendarCount}건`)
+        }
+        const errorText = lastError ? `\n\n오류: ${lastError}` : ''
+        alert(
+          `일정 추가 중 오류가 발생했습니다.\n성공 ${successCount}건, ${errors.join(
+            ', '
+          )}${errorText}`
+        )
       } else {
-        alert('근무 기록이 시트에 저장되었습니다.')
+        alert(
+          datesToAdd.length > 1
+            ? `${datesToAdd.length}개의 일정이 추가되었습니다.`
+            : '근무 기록이 시트에 저장되었습니다.'
+        )
       }
     }
 
     setFormData(getEmptyForm())
     setIsAdding(false)
+    setSelectedDates([])
+    setCalendarMonth(new Date())
   }
 
   const handleEdit = (schedule) => {
-    setFormData(schedule)
+    setFormData({ ...schedule })
     setEditingId(schedule.id)
     setIsAdding(true)
+    setSelectedDates([])
+    setCalendarMonth(new Date(schedule.date || Date.now()))
   }
 
   const handleDelete = async (id) => {
@@ -78,6 +126,8 @@ function ScheduleManager() {
     setIsAdding(false)
     setEditingId(null)
     setImageFile(null)
+    setSelectedDates([])
+    setCalendarMonth(new Date())
   }
 
   const handleImageUpload = async (e) => {
@@ -98,6 +148,7 @@ function ScheduleManager() {
     try {
       // Gemini API를 직접 호출 (로컬 개발 환경)
       const result = await analyzeScheduleImage(file, targetName.trim())
+      const availableModelsResult = await getAvailableGeminiModels()
       
       if (!result.success) {
         throw new Error(result.error || '이미지 분석에 실패했습니다.')
@@ -106,9 +157,19 @@ function ScheduleManager() {
       // 분석 결과를 사용자에게 보여주고 확인 받기
       if (result.data?.schedules && result.data.schedules.length > 0) {
         const schedules = result.data.schedules
+        const modelInfo = result.modelName
+          ? `\n\n사용 모델: ${result.modelName}`
+          : '\n\n사용 모델: 알 수 없음'
+        const availableModelsInfo = formatAvailableModelsInfo(
+          availableModelsResult
+        )
         const confirmMsg = `${schedules.length}개의 일정을 찾았습니다:\n\n${schedules
-          .map((s, i) => `${i + 1}. ${s.date} ${s.startTime}-${s.endTime}${s.uncertain ? ' (확인필요)' : ''}`)
-          .join('\n')}\n\n이 일정들을 추가하시겠습니까?`
+          .map((s, i) => {
+            const normalizedDate = normalizeImageScheduleDate(s.date)
+            const displayDate = normalizedDate || s.date || '날짜 없음'
+            return `${i + 1}. ${displayDate} ${s.startTime}-${s.endTime}${s.uncertain ? ' (확인필요)' : ''}`
+          })
+          .join('\n')}${modelInfo}${availableModelsInfo}\n\n이 일정들을 추가하시겠습니까?`
         
         if (confirm(confirmMsg)) {
           // 알바처 선택
@@ -132,10 +193,11 @@ function ScheduleManager() {
           let failedCalendarCount = 0
           let lastError = ''
           for (const schedule of schedules) {
-            if (schedule.date && schedule.startTime && schedule.endTime) {
+            const normalizedDate = normalizeImageScheduleDate(schedule.date)
+            if (normalizedDate && schedule.startTime && schedule.endTime) {
               const result = await addSchedule({
                 workplaceId: selectedWorkplace.id,
-                date: schedule.date,
+                date: normalizedDate,
                 startTime: schedule.startTime,
                 endTime: schedule.endTime,
                 memo:
@@ -216,6 +278,24 @@ function ScheduleManager() {
     return `${hours}시간 ${mins}분`
   }
 
+  const calendarCells = buildCalendarCells(calendarMonth)
+  const selectedSet = new Set(selectedDates)
+  const selectedDatesSorted = selectedDates.slice().sort()
+
+  const toggleSelectedDate = (dateKey) => {
+    setSelectedDates((prev) =>
+      prev.includes(dateKey) ? prev.filter((date) => date !== dateKey) : [...prev, dateKey]
+    )
+  }
+
+  const moveCalendarMonth = (offset) => {
+    setCalendarMonth((prev) => {
+      const next = new Date(prev)
+      next.setMonth(prev.getMonth() + offset)
+      return next
+    })
+  }
+
   return (
     <div className="schedule-manager">
       <div className="page-header">
@@ -275,15 +355,89 @@ function ScheduleManager() {
               </select>
             </div>
 
-            <div className="input-group">
-              <label>날짜 *</label>
-              <input
-                type="date"
-                value={formData.date}
-                onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                required
-              />
-            </div>
+            {editingId ? (
+              <div className="input-group">
+                <label>날짜 *</label>
+                <input
+                  type="date"
+                  value={formData.date}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                  required
+                />
+              </div>
+            ) : (
+              <div className="input-group">
+                <label>날짜 선택 *</label>
+                <div className="calendar">
+                  <div className="calendar-header">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => moveCalendarMonth(-1)}
+                    >
+                      이전
+                    </button>
+                    <div className="calendar-title">
+                      {formatMonthLabel(calendarMonth)}
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => moveCalendarMonth(1)}
+                    >
+                      다음
+                    </button>
+                  </div>
+                  <div className="calendar-weekdays">
+                    {CALENDAR_WEEKDAYS.map((day) => (
+                      <span key={day}>{day}</span>
+                    ))}
+                  </div>
+                  <div className="calendar-grid">
+                    {calendarCells.map((cell, index) => {
+                      if (!cell) {
+                        return <div key={`empty-${index}`} className="calendar-cell empty" />
+                      }
+                      const isSelected = selectedSet.has(cell.dateKey)
+                      return (
+                        <button
+                          key={cell.dateKey}
+                          type="button"
+                          className={`calendar-cell calendar-day ${
+                            isSelected ? 'selected' : ''
+                          }`}
+                          onClick={() => toggleSelectedDate(cell.dateKey)}
+                        >
+                          {cell.day}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="calendar-actions">
+                    <div className="calendar-hint">
+                      선택된 날짜: {selectedDatesSorted.length}개
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setSelectedDates([])}
+                      disabled={selectedDatesSorted.length === 0}
+                    >
+                      선택 초기화
+                    </button>
+                  </div>
+                  {selectedDatesSorted.length > 0 && (
+                    <div className="selected-dates">
+                      {selectedDatesSorted.map((date) => (
+                        <span key={date} className="selected-date-chip">
+                          {date}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="input-row">
               <div className="input-group">
@@ -424,6 +578,95 @@ function formatDate(dateString) {
   const dayOfWeek = days[date.getDay()]
   
   return `${year}년 ${month}월 ${day}일 (${dayOfWeek})`
+}
+
+function formatAvailableModelsInfo(result) {
+  if (!result?.success || !Array.isArray(result.models)) return ''
+
+  const uniqueModels = Array.from(new Set(result.models))
+  if (uniqueModels.length === 0) return ''
+
+  if (uniqueModels.length <= 6) {
+    return `\n사용 가능 모델: ${uniqueModels.join(', ')}`
+  }
+
+  const preview = uniqueModels.slice(0, 6).join(', ')
+  const remaining = uniqueModels.length - 6
+  return `\n사용 가능 모델: ${preview} 외 ${remaining}개`
+}
+
+function normalizeImageScheduleDate(value) {
+  if (!value) return null
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10)
+  }
+  if (typeof value !== 'string') return null
+
+  const trimmed = value.trim()
+  const currentYear = new Date().getFullYear()
+  const placeholderMatch = trimmed.match(/^yyyy[-/.](\d{1,2})[-/.](\d{1,2})$/i)
+  if (placeholderMatch) {
+    return formatDateParts(currentYear, placeholderMatch[1], placeholderMatch[2])
+  }
+
+  const fullMatch = trimmed.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/)
+  if (fullMatch) {
+    return formatDateParts(currentYear, fullMatch[2], fullMatch[3])
+  }
+
+  const shortYearMatch = trimmed.match(/^(\d{2})[-/.](\d{1,2})[-/.](\d{1,2})$/)
+  if (shortYearMatch) {
+    return formatDateParts(currentYear, shortYearMatch[2], shortYearMatch[3])
+  }
+
+  const shortMatch = trimmed.match(/^(\d{1,2})[-/.](\d{1,2})$/)
+  if (shortMatch) {
+    return formatDateParts(currentYear, shortMatch[1], shortMatch[2])
+  }
+
+  return null
+}
+
+function formatDateParts(year, month, day) {
+  const y = String(year).padStart(4, '0')
+  const m = String(month).padStart(2, '0')
+  const d = String(day).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+const CALENDAR_WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토']
+
+function buildCalendarCells(baseDate) {
+  const year = baseDate.getFullYear()
+  const monthIndex = baseDate.getMonth()
+  const startDay = new Date(year, monthIndex, 1).getDay()
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate()
+  const cells = []
+
+  for (let i = 0; i < startDay; i += 1) {
+    cells.push(null)
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const dateKey = formatDateParts(year, monthIndex + 1, day)
+    cells.push({ day, dateKey })
+  }
+
+  const remainder = cells.length % 7
+  if (remainder !== 0) {
+    const fillerCount = 7 - remainder
+    for (let i = 0; i < fillerCount; i += 1) {
+      cells.push(null)
+    }
+  }
+
+  return cells
+}
+
+function formatMonthLabel(date) {
+  const year = date.getFullYear()
+  const month = date.getMonth() + 1
+  return `${year}년 ${month}월`
 }
 
 export default ScheduleManager

@@ -20,6 +20,26 @@ async function fetchAvailableModels() {
   }
 }
 
+export async function getAvailableGeminiModels() {
+  const modelListResult = await fetchAvailableModels()
+  if (Array.isArray(modelListResult)) {
+    const names = modelListResult
+      .map((model) => model?.name)
+      .filter(Boolean)
+    return {
+      success: true,
+      models: names,
+    }
+  }
+
+  return {
+    success: false,
+    error:
+      modelListResult?.error?.message ||
+      '사용 가능한 모델을 가져오지 못했습니다.',
+  }
+}
+
 function selectModelFromList(models) {
   const usable = (models || []).filter((model) =>
     model?.supportedGenerationMethods?.includes('generateContent')

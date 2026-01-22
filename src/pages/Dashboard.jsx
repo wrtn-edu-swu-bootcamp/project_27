@@ -154,10 +154,46 @@ function Dashboard() {
                       </span>
                     </div>
                   )}
-                  {data.tax > 0 && (
+                  {(data.tax > 0 || data.taxType === 'four_insurance') && (
                     <div className="detail-row">
-                      <span>세금 (3.3%):</span>
+                      <span>
+                        {data.taxType === 'four_insurance'
+                          ? '4대보험 공제:'
+                          : `세금 ${data.taxType === 'withholding3_3' ? '(3.3%)' : ''}:`}
+                      </span>
                       <span className="tax">-{data.tax.toLocaleString()}원</span>
+                    </div>
+                  )}
+                  {data.taxType === 'four_insurance' && data.insuranceBreakdown && (
+                    <div className="detail-row">
+                      <span>국민연금:</span>
+                      <span className="tax">
+                        -{data.insuranceBreakdown.pension.toLocaleString()}원
+                      </span>
+                    </div>
+                  )}
+                  {data.taxType === 'four_insurance' && data.insuranceBreakdown && (
+                    <div className="detail-row">
+                      <span>건강보험:</span>
+                      <span className="tax">
+                        -{data.insuranceBreakdown.health.toLocaleString()}원
+                      </span>
+                    </div>
+                  )}
+                  {data.taxType === 'four_insurance' && data.insuranceBreakdown && (
+                    <div className="detail-row">
+                      <span>장기요양:</span>
+                      <span className="tax">
+                        -{data.insuranceBreakdown.longTermCare.toLocaleString()}원
+                      </span>
+                    </div>
+                  )}
+                  {data.taxType === 'four_insurance' && data.insuranceBreakdown && (
+                    <div className="detail-row">
+                      <span>고용보험:</span>
+                      <span className="tax">
+                        -{data.insuranceBreakdown.employment.toLocaleString()}원
+                      </span>
                     </div>
                   )}
                   {data.warnings && data.warnings.length > 0 && (

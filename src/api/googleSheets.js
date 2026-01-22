@@ -3,15 +3,17 @@
  * 상태 저장소로 사용 (DB 대체)
  */
 
+import { useAuthStore } from '../store/authStore'
+
 const SHEETS_API_URL = 'https://sheets.googleapis.com/v4/spreadsheets'
 const SCHEDULE_SHEET_NAME = '근무 기록'
 const WORKPLACE_SHEET_NAME = '알바처'
 const SCHEDULE_RANGE = `'${SCHEDULE_SHEET_NAME}'!A:H`
-const WORKPLACE_RANGE = `'${WORKPLACE_SHEET_NAME}'!A:G`
+const WORKPLACE_RANGE = `'${WORKPLACE_SHEET_NAME}'!A:I`
 const SCHEDULE_HEADER_RANGE = `'${SCHEDULE_SHEET_NAME}'!A1:H1`
-const WORKPLACE_HEADER_RANGE = `'${WORKPLACE_SHEET_NAME}'!A1:G1`
+const WORKPLACE_HEADER_RANGE = `'${WORKPLACE_SHEET_NAME}'!A1:I1`
 const SCHEDULE_FULL_RANGE = `'${SCHEDULE_SHEET_NAME}'!A1:H`
-const WORKPLACE_FULL_RANGE = `'${WORKPLACE_SHEET_NAME}'!A1:G`
+const WORKPLACE_FULL_RANGE = `'${WORKPLACE_SHEET_NAME}'!A1:I`
 const SCHEDULE_HEADERS = [
   'ID',
   '알바처ID',
@@ -30,7 +32,26 @@ const WORKPLACE_HEADERS = [
   '급여형태',
   '색상',
   '설정',
+  '세금/공제유형',
+  '4대보험설정',
 ]
+
+let lastAuthAlertAt = 0
+
+function handleUnauthorizedResponse(response) {
+  if (response.status !== 401) return
+  const now = Date.now()
+  if (now - lastAuthAlertAt < 5000) return
+  lastAuthAlertAt = now
+
+  console.error('인증 토큰 만료됨. 다시 로그인 필요.')
+  try {
+    useAuthStore.getState().logout()
+  } catch (error) {
+    console.error('로그아웃 처리 실패:', error)
+  }
+  alert('세션이 만료되었습니다. 다시 로그인해주세요.')
+}
 
 /**
  * 스프레드시트 생성 (최초 1회)
@@ -73,6 +94,7 @@ export async function createSpreadsheet(accessToken, userEmail) {
     })
 
     if (!response.ok) {
+      handleUnauthorizedResponse(response)
       const errorText = await response.text()
       throw new Error(`스프레드시트 생성 실패 (${response.status}): ${errorText}`)
     }
@@ -170,6 +192,8 @@ export async function saveWorkplaceToSheet(
         workplace.incomeType,
         workplace.color,
         JSON.stringify(workplace.settings),
+        workplace.taxType || '',
+        JSON.stringify(workplace.insuranceSettings || {}),
       ],
     ]
 
@@ -237,6 +261,7 @@ async function getSpreadsheetMetadata(accessToken, spreadsheetId) {
   )
 
   if (!response.ok) {
+    handleUnauthorizedResponse(response)
     const errorText = await response.text()
     return {
       success: false,
@@ -276,6 +301,7 @@ async function ensureSheetsExist(accessToken, spreadsheetId, sheetTitles) {
   })
 
   if (!response.ok) {
+    handleUnauthorizedResponse(response)
     const errorText = await response.text()
     throw new Error(`시트 추가 실패 (${response.status}): ${errorText}`)
   }
@@ -325,6 +351,8 @@ export async function syncWorkplacesToSheet(
       workplace.incomeType,
       workplace.color,
       JSON.stringify(workplace.settings),
+      workplace.taxType || '',
+      JSON.stringify(workplace.insuranceSettings || {}),
     ])
     await updateSheetValues(accessToken, spreadsheetId, WORKPLACE_FULL_RANGE, [
       WORKPLACE_HEADERS,
@@ -353,6 +381,7 @@ export async function getSheetValues(accessToken, spreadsheetId, range) {
     )
 
     if (!response.ok) {
+      handleUnauthorizedResponse(response)
       throw new Error('시트 읽기 실패')
     }
 
@@ -466,6 +495,63 @@ export async function deleteWorkplaceFromSheet(
 }
 
 /**
+ * 알바처 정보 수정
+ */
+export async function updateWorkplaceInSheet(
+  accessToken,
+  spreadsheetId,
+  workplace
+) {
+  try {
+    const valuesResult = await getSheetValues(
+      accessToken,
+      spreadsheetId,
+      WORKPLACE_RANGE
+    )
+    if (!valuesResult.success) {
+      throw new Error(valuesResult.error || '시트 읽기 실패')
+    }
+
+    const rows = valuesResult.values || []
+    const targetIndex = rows.findIndex((row) => row?.[0] === workplace.id)
+    if (targetIndex === -1) {
+      return { success: false, error: '시트에서 해당 ID를 찾을 수 없습니다.' }
+    }
+
+    const rowNumber = targetIndex + 1
+    if (rowNumber === 1) {
+      return { success: false, error: '헤더 행은 수정할 수 없습니다.' }
+    }
+
+    const rowValues = [
+      [
+        workplace.id,
+        workplace.name,
+        workplace.hourlyWage,
+        workplace.salaryType,
+        workplace.incomeType,
+        workplace.color,
+        JSON.stringify(workplace.settings),
+        workplace.taxType || '',
+        JSON.stringify(workplace.insuranceSettings || {}),
+      ],
+    ]
+
+    await updateSheetValues(
+      accessToken,
+      spreadsheetId,
+      `'${WORKPLACE_SHEET_NAME}'!A${rowNumber}:I${rowNumber}`,
+      rowValues
+    )
+
+    return { success: true }
+  } catch (error) {
+    console.error('알바처 수정 오류:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+/**
  * 근무 기록 수정
  */
 export async function updateScheduleInSheet(
@@ -532,6 +618,7 @@ async function getSheetIdByTitle(accessToken, spreadsheetId, title) {
   )
 
   if (!response.ok) {
+    handleUnauthorizedResponse(response)
     const errorText = await response.text()
     throw new Error(`시트 메타데이터 조회 실패 (${response.status}): ${errorText}`)
   }
@@ -568,6 +655,7 @@ async function deleteSheetRow(accessToken, spreadsheetId, sheetId, rowIndex) {
   )
 
   if (!response.ok) {
+    handleUnauthorizedResponse(response)
     const errorText = await response.text()
     throw new Error(`시트 행 삭제 실패 (${response.status}): ${errorText}`)
   }
@@ -590,6 +678,7 @@ async function updateSheetValues(accessToken, spreadsheetId, range, values) {
   )
 
   if (!response.ok) {
+    handleUnauthorizedResponse(response)
     const errorText = await response.text()
     throw new Error(`시트 업데이트 실패 (${response.status}): ${errorText}`)
   }
@@ -614,6 +703,7 @@ async function appendSheetValues(accessToken, spreadsheetId, range, values) {
   )
 
   if (!response.ok) {
+    handleUnauthorizedResponse(response)
     const errorText = await response.text()
     throw new Error(`시트 추가 실패 (${response.status}): ${errorText}`)
   }

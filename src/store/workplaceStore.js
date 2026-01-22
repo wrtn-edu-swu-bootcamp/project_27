@@ -1,6 +1,10 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { deleteWorkplaceFromSheet, saveWorkplaceToSheet } from '../api/googleSheets'
+import {
+  deleteWorkplaceFromSheet,
+  saveWorkplaceToSheet,
+  updateWorkplaceInSheet,
+} from '../api/googleSheets'
 import { useAuthStore } from './authStore'
 
 /**
@@ -69,12 +73,35 @@ export const useWorkplaceStore = create(
         }))
       },
       
-      updateWorkplace: (id, updates) =>
+      updateWorkplace: async (id, updates) => {
+        let updatedWorkplace = null
         set((state) => ({
-          workplaces: state.workplaces.map((wp) =>
-            wp.id === id ? { ...wp, ...updates } : wp
-          ),
-        })),
+          workplaces: state.workplaces.map((wp) => {
+            if (wp.id !== id) return wp
+            updatedWorkplace = { ...wp, ...updates }
+            return updatedWorkplace
+          }),
+        }))
+
+        if (!updatedWorkplace) return
+
+        const authState = useAuthStore.getState()
+        const { accessToken } = authState
+
+        if (accessToken) {
+          const spreadsheetId = await authState.ensureSpreadsheetId()
+          if (spreadsheetId) {
+            const sheetResult = await updateWorkplaceInSheet(
+              accessToken,
+              spreadsheetId,
+              updatedWorkplace
+            )
+            if (!sheetResult.success) {
+              console.error('알바처 시트 수정 실패:', sheetResult.error)
+            }
+          }
+        }
+      },
       
       deleteWorkplace: async (id) => {
         const authState = useAuthStore.getState()

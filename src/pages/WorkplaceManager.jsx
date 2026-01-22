@@ -803,11 +803,13 @@ function WorkplaceManager() {
                     </span>
                   </div>
                   <div className="info-row">
-                    <span className="label">급여 형태:</span>
+                    <span className="label">세금/공제 형태:</span>
                     <span className="value">
-                      {workplace.incomeType === 'employment'
-                        ? '근로소득'
-                        : '사업소득'}
+                      {workplace.taxType === 'withholding3_3'
+                        ? '3.3% 공제'
+                        : workplace.taxType === 'four_insurance'
+                        ? '4대보험 공제'
+                        : '미설정'}
                     </span>
                   </div>
                   <div className="allowances">
