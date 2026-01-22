@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { deleteWorkplaceFromSheet, saveWorkplaceToSheet } from '../api/googleSheets'
+import { useAuthStore } from './authStore'
 
 /**
  * 알바처 데이터 구조:
@@ -7,14 +9,26 @@ import { persist } from 'zustand/middleware'
  *   id: string,
  *   name: string,
  *   hourlyWage: number,
+ *   breakType: 'none' | 'standard' | 'custom',
+ *   breakEveryHours?: number,
+ *   breakMinutesPerBlock?: number,
  *   salaryType: 'weekly' | 'monthly',
  *   incomeType: 'employment' | 'business',
+ *   taxType?: 'withholding3_3' | 'four_insurance' | 'unknown',
+ *   insuranceSettings?: {
+ *     pension?: { enabled: boolean, rate: number },
+ *     health?: { enabled: boolean, rate: number },
+ *     longTermCare?: { enabled: boolean, rate: number },
+ *     employment?: { enabled: boolean, rate: number },
+ *     accident?: { enabled: boolean, rate: number }
+ *   },
  *   settings: {
  *     weeklyHolidayPay: {
  *       supported: boolean,
  *       userConfirmed: boolean,
  *       condition: string,
- *       status: 'confirmed' | 'conditional' | 'unknown'
+ *       status: 'confirmed' | 'conditional' | 'unknown',
+ *       selection: 'yes' | 'no' | 'unknown'
  *     },
  *     nightPay: { ... },
  *     holidayPay: { ... }
@@ -27,11 +41,33 @@ export const useWorkplaceStore = create(
   persist(
     (set, get) => ({
       workplaces: [],
-      
-      addWorkplace: (workplace) =>
+      hydrated: false,
+
+      setHydrated: (value) => set({ hydrated: value }),
+
+      addWorkplace: async (workplace) => {
+        const newWorkplace = { ...workplace, id: Date.now().toString() }
+        const authState = useAuthStore.getState()
+        const { accessToken } = authState
+
+        if (accessToken) {
+          const spreadsheetId = await authState.ensureSpreadsheetId()
+          if (spreadsheetId) {
+            const sheetResult = await saveWorkplaceToSheet(
+              accessToken,
+              spreadsheetId,
+              newWorkplace
+            )
+            if (!sheetResult.success) {
+              console.error('알바처 시트 저장 실패:', sheetResult.error)
+            }
+          }
+        }
+
         set((state) => ({
-          workplaces: [...state.workplaces, { ...workplace, id: Date.now().toString() }],
-        })),
+          workplaces: [...state.workplaces, newWorkplace],
+        }))
+      },
       
       updateWorkplace: (id, updates) =>
         set((state) => ({
@@ -40,10 +76,28 @@ export const useWorkplaceStore = create(
           ),
         })),
       
-      deleteWorkplace: (id) =>
+      deleteWorkplace: async (id) => {
+        const authState = useAuthStore.getState()
+        const { accessToken } = authState
+
+        if (accessToken && id) {
+          const spreadsheetId = await authState.ensureSpreadsheetId()
+          if (spreadsheetId) {
+            const sheetResult = await deleteWorkplaceFromSheet(
+              accessToken,
+              spreadsheetId,
+              id
+            )
+            if (!sheetResult.success) {
+              console.error('알바처 시트 삭제 실패:', sheetResult.error)
+            }
+          }
+        }
+
         set((state) => ({
           workplaces: state.workplaces.filter((wp) => wp.id !== id),
-        })),
+        }))
+      },
       
       getWorkplaceById: (id) => {
         return get().workplaces.find((wp) => wp.id === id)
@@ -51,6 +105,9 @@ export const useWorkplaceStore = create(
     }),
     {
       name: 'workplace-storage',
+      onRehydrateStorage: () => (state) => {
+        state?.setHydrated(true)
+      },
     }
   )
 )

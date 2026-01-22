@@ -119,11 +119,13 @@ function SalaryCalculator() {
                 </span>
               </div>
               <div className="summary-item">
-                <span className="label">급여 형태</span>
+                <span className="label">공제 유형</span>
                 <span className="value">
-                  {salaryDetail.workplace.incomeType === 'employment'
-                    ? '근로소득'
-                    : '사업소득'}
+                  {salaryDetail.taxType === 'withholding3_3'
+                    ? '3.3% 공제'
+                    : salaryDetail.taxType === 'four_insurance'
+                    ? '4대보험 공제'
+                    : '미설정'}
                 </span>
               </div>
             </div>
@@ -165,7 +167,7 @@ function SalaryCalculator() {
                 <div className="breakdown-item extra">
                   <div className="breakdown-label">
                     <span className="label-text">휴일수당</span>
-                    <span className="label-hint">주말/공휴일 근무 시 50%</span>
+                    <span className="label-hint">법정공휴일 근무 시 50%</span>
                   </div>
                   <div className="breakdown-value extra-value">
                     +{salaryDetail.holidayPay.toLocaleString()}원
@@ -196,15 +198,33 @@ function SalaryCalculator() {
                 </div>
               </div>
 
-              {salaryDetail.tax > 0 && (
+              {(salaryDetail.tax > 0 || salaryDetail.taxType === 'four_insurance') && (
                 <div className="breakdown-item deduction">
                   <div className="breakdown-label">
-                    <span className="label-text">세금 (3.3%)</span>
-                    <span className="label-hint">사업소득 공제</span>
+                    <span className="label-text">
+                      {salaryDetail.taxType === 'four_insurance'
+                        ? '4대보험 공제'
+                        : `세금 ${salaryDetail.taxType === 'withholding3_3' ? '(3.3%)' : ''}`}
+                    </span>
+                    <span className="label-hint">
+                      {salaryDetail.taxType === 'withholding3_3'
+                        ? '원천징수'
+                        : salaryDetail.taxType === 'four_insurance'
+                        ? '근로자 부담'
+                        : '공제'}
+                    </span>
                   </div>
                   <div className="breakdown-value deduction-value">
                     -{salaryDetail.tax.toLocaleString()}원
                   </div>
+                  {salaryDetail.taxType === 'four_insurance' && salaryDetail.insuranceBreakdown && (
+                    <div className="breakdown-sub">
+                      <span>국민연금: -{salaryDetail.insuranceBreakdown.pension.toLocaleString()}원</span>
+                      <span>건강보험: -{salaryDetail.insuranceBreakdown.health.toLocaleString()}원</span>
+                      <span>장기요양: -{salaryDetail.insuranceBreakdown.longTermCare.toLocaleString()}원</span>
+                      <span>고용보험: -{salaryDetail.insuranceBreakdown.employment.toLocaleString()}원</span>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -243,14 +263,19 @@ function SalaryCalculator() {
                   <strong>야간수당:</strong> 22:00~06:00 근무 시 기본급의 50% 추가
                 </li>
                 <li>
-                  <strong>휴일수당:</strong> 주말/공휴일 근무 시 기본급의 50% 추가
+                  <strong>휴일수당:</strong> 법정공휴일 근무 시 기본급의 50% 추가
                 </li>
                 <li>
                   <strong>주휴수당:</strong> 주 15시간 이상 근무 시 1일치 급여(8시간)
                   지급
                 </li>
                 <li>
-                  <strong>사업소득:</strong> 총 급여에서 3.3% 세금 공제
+                  <strong>3.3% 공제:</strong> 소득세 3% + 지방소득세 0.3%
+                </li>
+                <li>
+                  <strong>4대보험 공제(근로자 부담):</strong> 국민연금 4.5%,
+                  건강보험 3.545%, 장기요양보험(건강보험료의 12.81%),
+                  고용보험 0.9% (산재보험은 사업주 부담)
                 </li>
               </ul>
               <p className="note-footer">

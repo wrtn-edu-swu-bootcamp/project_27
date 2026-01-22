@@ -65,13 +65,25 @@ export function calculateNightMinutes(startTime, endTime) {
 /**
  * 야간 수당 계산 (기본급의 50%)
  */
-export function calculateNightPay(startTime, endTime, hourlyWage, settings) {
+export function calculateNightPay(
+  startTime,
+  endTime,
+  hourlyWage,
+  settings,
+  breakMinutes,
+  totalMinutes
+) {
   if (!settings?.nightPay?.supported || !settings?.nightPay?.userConfirmed) {
     return 0
   }
   
   const nightMinutes = calculateNightMinutes(startTime, endTime)
-  const nightHours = nightMinutes / 60
+  const adjustedNightMinutes = adjustMinutesForBreak(
+    nightMinutes,
+    totalMinutes,
+    breakMinutes
+  )
+  const nightHours = adjustedNightMinutes / 60
   return Math.floor(nightHours * hourlyWage * 0.5)
 }
 
@@ -95,7 +107,7 @@ export function calculateWeeklyHolidayPay(weeklyMinutes, hourlyWage, settings) {
 }
 
 /**
- * 주말/공휴일 수당 계산 (기본급의 50%)
+ * 휴일 수당 계산 (기본급의 50%)
  */
 export function calculateHolidayPay(date, minutes, hourlyWage, settings) {
   if (!settings?.holidayPay?.supported || !settings?.holidayPay?.userConfirmed) {
@@ -104,14 +116,12 @@ export function calculateHolidayPay(date, minutes, hourlyWage, settings) {
   
   const dayOfWeek = new Date(date).getDay()
   
-  // 일요일(0) 또는 토요일(6)
+  // TODO: 법정공휴일 체크 로직 추가 필요
   if (dayOfWeek === 0 || dayOfWeek === 6) {
     const hours = minutes / 60
     return Math.floor(hours * hourlyWage * 0.5)
   }
-  
-  // TODO: 공휴일 체크 로직 추가 필요
-  
+
   return 0
 }
 
@@ -137,30 +147,34 @@ export function calculateSalaryDetail(schedules, workplace) {
   
   schedules.forEach((schedule) => {
     const minutes = calculateWorkMinutes(schedule.startTime, schedule.endTime)
-    totalMinutes += minutes
+    const breakMinutes = calculateBreakMinutes(minutes, workplace)
+    const effectiveMinutes = Math.max(0, minutes - breakMinutes)
+    totalMinutes += effectiveMinutes
     
     // 기본급
-    basicPay += calculateBasicPay(minutes, workplace.hourlyWage)
+    basicPay += calculateBasicPay(effectiveMinutes, workplace.hourlyWage)
     
     // 야간수당
     nightPay += calculateNightPay(
       schedule.startTime,
       schedule.endTime,
       workplace.hourlyWage,
-      workplace.settings
+      workplace.settings,
+      breakMinutes,
+      minutes
     )
     
     // 휴일수당
     holidayPay += calculateHolidayPay(
       schedule.date,
-      minutes,
+      effectiveMinutes,
       workplace.hourlyWage,
       workplace.settings
     )
     
     // 주별 근무 시간 집계
     const weekKey = getWeekKey(schedule.date)
-    weeklyMinutes[weekKey] = (weeklyMinutes[weekKey] || 0) + minutes
+    weeklyMinutes[weekKey] = (weeklyMinutes[weekKey] || 0) + effectiveMinutes
   })
   
   // 주휴수당 계산
@@ -174,9 +188,18 @@ export function calculateSalaryDetail(schedules, workplace) {
   
   const totalBeforeTax = basicPay + nightPay + holidayPay + weeklyHolidayPay
   
-  // 사업소득인 경우 3.3% 공제
+  const taxType = workplace.taxType || 'unknown'
+  const insuranceSettings = workplace.insuranceSettings || {}
+  const insuranceBreakdown = calculateInsuranceDeduction(
+    totalBeforeTax,
+    insuranceSettings
+  )
   const tax =
-    workplace.incomeType === 'business' ? calculateBusinessIncomeTax(totalBeforeTax) : 0
+    taxType === 'withholding3_3'
+      ? calculateBusinessIncomeTax(totalBeforeTax)
+      : taxType === 'four_insurance'
+      ? insuranceBreakdown.total
+      : 0
   
   const totalAfterTax = totalBeforeTax - tax
   
@@ -189,8 +212,80 @@ export function calculateSalaryDetail(schedules, workplace) {
     weeklyHolidayPay,
     totalBeforeTax,
     tax,
+    taxType,
+    insuranceBreakdown,
     totalAfterTax,
     warnings: generateWarnings(workplace),
+  }
+}
+
+function adjustMinutesForBreak(targetMinutes, totalMinutes, breakMinutes) {
+  if (!totalMinutes || !breakMinutes) {
+    return targetMinutes
+  }
+  const effectiveMinutes = Math.max(0, totalMinutes - breakMinutes)
+  const ratio = effectiveMinutes / totalMinutes
+  return Math.max(0, Math.round(targetMinutes * ratio))
+}
+
+export function calculateBreakMinutes(totalMinutes, workplace) {
+  const breakType = workplace.breakType || 'none'
+  if (!totalMinutes || breakType === 'none') {
+    return 0
+  }
+
+  if (breakType === 'standard') {
+    return calculateBreakByRule(totalMinutes, 4, 30)
+  }
+
+  if (breakType === 'custom') {
+    const everyHours = Number(workplace.breakEveryHours || 0)
+    const minutesPerBlock = Number(workplace.breakMinutesPerBlock || 0)
+    if (!everyHours || !minutesPerBlock) {
+      return 0
+    }
+    return calculateBreakByRule(totalMinutes, everyHours, minutesPerBlock)
+  }
+
+  return 0
+}
+
+function calculateBreakByRule(totalMinutes, everyHours, minutesPerBlock) {
+  const blockMinutes = everyHours * 60
+  if (!blockMinutes || totalMinutes < blockMinutes) {
+    return 0
+  }
+  const blocks = Math.floor(totalMinutes / blockMinutes)
+  return Math.min(totalMinutes, blocks * minutesPerBlock)
+}
+
+function calculateInsuranceDeduction(totalBeforeTax, settings) {
+  const safeNumber = (value) => Number(value || 0)
+  const pensionRate = safeNumber(settings?.pension?.rate)
+  const healthRate = safeNumber(settings?.health?.rate)
+  const longTermRate = safeNumber(settings?.longTermCare?.rate)
+  const employmentRate = safeNumber(settings?.employment?.rate)
+
+  const pension = settings?.pension?.enabled
+    ? Math.floor(totalBeforeTax * (pensionRate / 100))
+    : 0
+  const health = settings?.health?.enabled
+    ? Math.floor(totalBeforeTax * (healthRate / 100))
+    : 0
+  const longTermCare =
+    settings?.longTermCare?.enabled && health > 0
+      ? Math.floor(health * (longTermRate / 100))
+      : 0
+  const employment = settings?.employment?.enabled
+    ? Math.floor(totalBeforeTax * (employmentRate / 100))
+    : 0
+
+  return {
+    pension,
+    health,
+    longTermCare,
+    employment,
+    total: pension + health + longTermCare + employment,
   }
 }
 
@@ -216,21 +311,48 @@ function generateWarnings(workplace) {
   
   // 주휴수당 미확인
   if (
-    settings.weeklyHolidayPay?.supported &&
-    !settings.weeklyHolidayPay?.userConfirmed
+    settings.weeklyHolidayPay?.selection === 'unknown' ||
+    (settings.weeklyHolidayPay?.supported &&
+      !settings.weeklyHolidayPay?.userConfirmed)
   ) {
     warnings.push('주휴수당 설정이 확인되지 않아 계산에서 제외되었습니다.')
   }
   
   // 야간수당 미확인
-  if (settings.nightPay?.supported && !settings.nightPay?.userConfirmed) {
+  if (
+    settings.nightPay?.selection === 'unknown' ||
+    (settings.nightPay?.supported && !settings.nightPay?.userConfirmed)
+  ) {
     warnings.push('야간수당 설정이 확인되지 않아 계산에서 제외되었습니다.')
   }
   
   // 휴일수당 미확인
-  if (settings.holidayPay?.supported && !settings.holidayPay?.userConfirmed) {
+  if (
+    settings.holidayPay?.selection === 'unknown' ||
+    (settings.holidayPay?.supported && !settings.holidayPay?.userConfirmed)
+  ) {
     warnings.push('휴일수당 설정이 확인되지 않아 계산에서 제외되었습니다.')
+  }
+
+  if (workplace.taxType === 'unknown') {
+    warnings.push('세금/공제 유형이 설정되지 않아 공제가 반영되지 않았습니다.')
+  }
+
+  if (workplace.taxType === 'four_insurance') {
+    if (!hasInsuranceSelection(workplace.insuranceSettings)) {
+      warnings.push('4대보험 공제 항목이 설정되지 않아 계산에서 제외되었습니다.')
+    }
   }
   
   return warnings
+}
+
+function hasInsuranceSelection(settings) {
+  if (!settings) return false
+  return Boolean(
+    settings?.pension?.enabled ||
+      settings?.health?.enabled ||
+      settings?.longTermCare?.enabled ||
+      settings?.employment?.enabled
+  )
 }

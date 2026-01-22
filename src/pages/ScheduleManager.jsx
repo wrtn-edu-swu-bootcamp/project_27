@@ -1,6 +1,11 @@
 import { useState } from 'react'
 import { useWorkplaceStore } from '../store/workplaceStore'
 import { useScheduleStore } from '../store/scheduleStore'
+import { analyzeScheduleImage } from '../api/gemini'
+import {
+  calculateBreakMinutes,
+  calculateWorkMinutes,
+} from '../utils/salaryCalculator'
 import './ScheduleManager.css'
 
 function ScheduleManager() {
@@ -24,7 +29,7 @@ function ScheduleManager() {
     }
   }
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
 
     if (!formData.workplaceId || !formData.date || !formData.startTime || !formData.endTime) {
@@ -33,10 +38,23 @@ function ScheduleManager() {
     }
 
     if (editingId) {
-      updateSchedule(editingId, formData)
+      await updateSchedule(editingId, formData)
       setEditingId(null)
     } else {
-      addSchedule(formData)
+      const result = await addSchedule(formData)
+      if (!result?.sheetSaved) {
+        alert(`근무 기록 시트 저장 실패: ${result?.error || '알 수 없는 오류'}`)
+      } else if (!result?.calendarSaved) {
+        alert(`캘린더 추가 실패: ${result?.error || '알 수 없는 오류'}`)
+      } else if (result?.spreadsheetUrl) {
+        console.info('근무 기록 시트 저장 완료:', {
+          spreadsheetUrl: result.spreadsheetUrl,
+          updates: result.sheetUpdates,
+        })
+        alert('근무 기록이 시트에 저장되었습니다.')
+      } else {
+        alert('근무 기록이 시트에 저장되었습니다.')
+      }
     }
 
     setFormData(getEmptyForm())
@@ -49,9 +67,9 @@ function ScheduleManager() {
     setIsAdding(true)
   }
 
-  const handleDelete = (id) => {
+  const handleDelete = async (id) => {
     if (confirm('이 근무 일정을 삭제하시겠습니까?')) {
-      deleteSchedule(id)
+      await deleteSchedule(id)
     }
   }
 
@@ -66,35 +84,102 @@ function ScheduleManager() {
     const file = e.target.files[0]
     if (!file) return
 
+    const targetName = prompt(
+      '전체 일정표라면 본인 이름/닉네임을 입력해주세요.'
+    )
+    if (!targetName) {
+      setImageFile(null)
+      return
+    }
+
     setImageFile(file)
     setIsAnalyzing(true)
 
     try {
-      // Gemini API를 사용한 이미지 분석
-      const formData = new FormData()
-      formData.append('image', file)
-
-      const response = await fetch('/api/analyze-schedule', {
-        method: 'POST',
-        body: formData,
-      })
-
-      if (!response.ok) {
-        throw new Error('이미지 분석에 실패했습니다.')
+      // Gemini API를 직접 호출 (로컬 개발 환경)
+      const result = await analyzeScheduleImage(file, targetName.trim())
+      
+      if (!result.success) {
+        throw new Error(result.error || '이미지 분석에 실패했습니다.')
       }
 
-      const result = await response.json()
-      
       // 분석 결과를 사용자에게 보여주고 확인 받기
-      if (result.schedules && result.schedules.length > 0) {
-        alert(`${result.schedules.length}개의 일정을 찾았습니다. 확인 후 저장해주세요.`)
-        // TODO: 결과 확인 UI 구현
+      if (result.data?.schedules && result.data.schedules.length > 0) {
+        const schedules = result.data.schedules
+        const confirmMsg = `${schedules.length}개의 일정을 찾았습니다:\n\n${schedules
+          .map((s, i) => `${i + 1}. ${s.date} ${s.startTime}-${s.endTime}${s.uncertain ? ' (확인필요)' : ''}`)
+          .join('\n')}\n\n이 일정들을 추가하시겠습니까?`
+        
+        if (confirm(confirmMsg)) {
+          // 알바처 선택
+          if (workplaces.length === 0) {
+            alert('먼저 알바처를 등록해주세요.')
+            return
+          }
+          
+          const workplaceId = workplaces.length === 1 
+            ? workplaces[0].id 
+            : prompt(`알바처 번호를 선택하세요:\n${workplaces.map((w, i) => `${i + 1}. ${w.name}`).join('\n')}`)
+          
+          if (!workplaceId) return
+          
+          const selectedWorkplace = workplaces.length === 1 
+            ? workplaces[0] 
+            : workplaces[parseInt(workplaceId) - 1]
+          
+          // 일정 추가
+          let failedSheetCount = 0
+          let failedCalendarCount = 0
+          let lastError = ''
+          for (const schedule of schedules) {
+            if (schedule.date && schedule.startTime && schedule.endTime) {
+              const result = await addSchedule({
+                workplaceId: selectedWorkplace.id,
+                date: schedule.date,
+                startTime: schedule.startTime,
+                endTime: schedule.endTime,
+                memo:
+                  schedule.memo ||
+                  (schedule.uncertain ? '(AI 분석 - 확인 필요)' : '(AI 분석)'),
+                source: 'image',
+              })
+              if (!result?.sheetSaved) {
+                failedSheetCount += 1
+                lastError = result?.error || lastError
+              } else if (!result?.calendarSaved) {
+                failedCalendarCount += 1
+                lastError = result?.error || lastError
+              }
+            }
+          }
+
+          if (failedSheetCount > 0 || failedCalendarCount > 0) {
+            const errors = []
+            if (failedSheetCount > 0) {
+              errors.push(`시트 저장 실패 ${failedSheetCount}건`)
+            }
+            if (failedCalendarCount > 0) {
+              errors.push(`캘린더 추가 실패 ${failedCalendarCount}건`)
+            }
+            const errorText = lastError ? `\n\n오류: ${lastError}` : ''
+            alert(`일정 추가 중 오류가 발생했습니다.\n${errors.join(', ')}${errorText}`)
+          } else {
+            alert(`${schedules.length}개의 일정이 추가되었습니다.`)
+          }
+        }
+      } else {
+        alert('일정을 찾을 수 없습니다. 다른 이미지를 시도해보세요.')
+      }
+      
+      if (result.data?.notes) {
+        console.log('AI 주의사항:', result.data.notes)
       }
     } catch (error) {
       console.error('이미지 분석 오류:', error)
-      alert('이미지 분석 중 오류가 발생했습니다.')
+      alert(`이미지 분석 중 오류가 발생했습니다: ${error.message}`)
     } finally {
       setIsAnalyzing(false)
+      setImageFile(null)
     }
   }
 
@@ -112,6 +197,24 @@ function ScheduleManager() {
   const sortedDates = Object.keys(groupedSchedules).sort((a, b) => 
     new Date(b) - new Date(a)
   )
+
+  const getWorkSummary = (schedule, workplace) => {
+    if (!workplace) return 0
+    if (!schedule.startTime || !schedule.endTime) return 0
+    const totalMinutes = calculateWorkMinutes(
+      schedule.startTime,
+      schedule.endTime
+    )
+    const breakMinutes = calculateBreakMinutes(totalMinutes, workplace)
+    const effectiveMinutes = Math.max(0, totalMinutes - breakMinutes)
+    return { totalMinutes, breakMinutes, effectiveMinutes }
+  }
+
+  const formatMinutes = (minutes) => {
+    const hours = Math.floor(minutes / 60)
+    const mins = minutes % 60
+    return `${hours}시간 ${mins}분`
+  }
 
   return (
     <div className="schedule-manager">
@@ -255,6 +358,9 @@ function ScheduleManager() {
                     const workplace = workplaces.find(
                       (w) => w.id === schedule.workplaceId
                     )
+                    const summary = getWorkSummary(schedule, workplace)
+                    const breakMinutes = summary?.breakMinutes ?? 0
+                    const effectiveMinutes = summary?.effectiveMinutes ?? 0
                     return (
                       <div key={schedule.id} className="schedule-item">
                         <div
@@ -269,6 +375,12 @@ function ScheduleManager() {
                             <div className="schedule-time">
                               {schedule.startTime} - {schedule.endTime}
                             </div>
+                          </div>
+                          <div className="schedule-break">
+                            휴게시간: {breakMinutes}분
+                          </div>
+                          <div className="schedule-total">
+                            총 근무시간: {formatMinutes(effectiveMinutes)}
                           </div>
                           {schedule.memo && (
                             <div className="schedule-memo">{schedule.memo}</div>

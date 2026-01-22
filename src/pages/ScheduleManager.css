@@ -132,6 +132,18 @@
   font-weight: 500;
 }
 
+.schedule-break {
+  font-size: 0.85rem;
+  color: #5f6368;
+  margin-top: 0.35rem;
+}
+
+.schedule-total {
+  font-size: 0.85rem;
+  color: #5f6368;
+  margin-top: 0.25rem;
+}
+
 .schedule-memo {
   font-size: 0.9rem;
   color: #5f6368;
