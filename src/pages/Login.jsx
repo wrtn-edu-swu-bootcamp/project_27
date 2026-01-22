@@ -45,7 +45,6 @@ function Login() {
       'https://www.googleapis.com/auth/userinfo.email',
       'https://www.googleapis.com/auth/userinfo.profile',
       'https://www.googleapis.com/auth/calendar',
-      'https://www.googleapis.com/auth/spreadsheets',
     ].join(' '),
   })
 
@@ -100,7 +99,7 @@ function Login() {
 
         <div className="login-footer">
           <p>
-            로그인하면 Google Calendar 및 Google Sheets 접근 권한이 요청됩니다.
+            로그인하면 Google Calendar 접근 권한이 요청됩니다.
           </p>
         </div>
       </div>

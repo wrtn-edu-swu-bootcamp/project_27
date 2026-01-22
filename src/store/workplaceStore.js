@@ -1,11 +1,5 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import {
-  deleteWorkplaceFromSheet,
-  saveWorkplaceToSheet,
-  updateWorkplaceInSheet,
-} from '../api/googleSheets'
-import { useAuthStore } from './authStore'
 
 /**
  * 알바처 데이터 구조:
@@ -51,22 +45,6 @@ export const useWorkplaceStore = create(
 
       addWorkplace: async (workplace) => {
         const newWorkplace = { ...workplace, id: Date.now().toString() }
-        const authState = useAuthStore.getState()
-        const { accessToken } = authState
-
-        if (accessToken) {
-          const spreadsheetId = await authState.ensureSpreadsheetId()
-          if (spreadsheetId) {
-            const sheetResult = await saveWorkplaceToSheet(
-              accessToken,
-              spreadsheetId,
-              newWorkplace
-            )
-            if (!sheetResult.success) {
-              console.error('알바처 시트 저장 실패:', sheetResult.error)
-            }
-          }
-        }
 
         set((state) => ({
           workplaces: [...state.workplaces, newWorkplace],
@@ -82,45 +60,9 @@ export const useWorkplaceStore = create(
             return updatedWorkplace
           }),
         }))
-
-        if (!updatedWorkplace) return
-
-        const authState = useAuthStore.getState()
-        const { accessToken } = authState
-
-        if (accessToken) {
-          const spreadsheetId = await authState.ensureSpreadsheetId()
-          if (spreadsheetId) {
-            const sheetResult = await updateWorkplaceInSheet(
-              accessToken,
-              spreadsheetId,
-              updatedWorkplace
-            )
-            if (!sheetResult.success) {
-              console.error('알바처 시트 수정 실패:', sheetResult.error)
-            }
-          }
-        }
       },
       
       deleteWorkplace: async (id) => {
-        const authState = useAuthStore.getState()
-        const { accessToken } = authState
-
-        if (accessToken && id) {
-          const spreadsheetId = await authState.ensureSpreadsheetId()
-          if (spreadsheetId) {
-            const sheetResult = await deleteWorkplaceFromSheet(
-              accessToken,
-              spreadsheetId,
-              id
-            )
-            if (!sheetResult.success) {
-              console.error('알바처 시트 삭제 실패:', sheetResult.error)
-            }
-          }
-        }
-
         set((state) => ({
           workplaces: state.workplaces.filter((wp) => wp.id !== id),
         }))

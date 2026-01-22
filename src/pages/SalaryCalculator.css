@@ -10,12 +10,36 @@
   gap: 1rem;
 }
 
+.range-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.range-row input[type='month'] {
+  flex: 1;
+}
+
+.range-sep {
+  color: #5f6368;
+  font-weight: 600;
+}
+
 .salary-summary-card {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border-radius: 12px;
   padding: 2rem;
   color: white;
   margin-bottom: 2rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.salary-range-summary-card {
+  background: linear-gradient(135deg, #1a73e8 0%, #34a853 100%);
+  border-radius: 12px;
+  padding: 2rem;
+  color: white;
+  margin: 2rem 0;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
 }
 
@@ -48,6 +72,67 @@
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 1.5rem;
+}
+
+.salary-workplace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.salary-workplace-item {
+  border: 1px solid #e8eaed;
+  border-radius: 10px;
+  padding: 1.5rem;
+  background: #fff;
+}
+
+.salary-workplace-item.compact {
+  padding: 1.25rem;
+}
+
+.salary-workplace-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #e8eaed;
+}
+
+.salary-workplace-item.compact .salary-workplace-header {
+  padding-bottom: 0;
+  margin-bottom: 0;
+  border-bottom: none;
+}
+
+.salary-workplace-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.salary-workplace-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.salary-workplace-name {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #202124;
+}
+
+.salary-workplace-sub {
+  font-size: 0.9rem;
+  color: #5f6368;
+}
+
+.salary-workplace-total {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #4285f4;
 }
 
 .summary-item {
@@ -241,5 +326,20 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 0.5rem;
+  }
+
+  .salary-workplace-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .salary-workplace-total {
+    font-size: 1.25rem;
+  }
+
+  .range-row {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

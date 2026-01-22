@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { addEventToCalendar, deleteEventFromCalendar, updateEventInCalendar } from '../api/googleCalendar'
-import { deleteScheduleFromSheet, saveScheduleToSheet, updateScheduleInSheet } from '../api/googleSheets'
 import { useAuthStore } from './authStore'
 import { useWorkplaceStore } from './workplaceStore'
 
@@ -49,40 +48,10 @@ export const useScheduleStore = create(
         }
         const { accessToken } = useAuthStore.getState()
         const result = {
-          sheetSaved: false,
           calendarSaved: false,
           error: null,
         }
         let calendarAttempted = false
-
-        if (accessToken) {
-          const authState = useAuthStore.getState()
-          const spreadsheetId = await authState.ensureSpreadsheetId()
-          if (spreadsheetId) {
-            const sheetResult = await saveScheduleToSheet(
-              accessToken,
-              spreadsheetId,
-              newSchedule
-            )
-            result.sheetSaved = sheetResult?.success === true
-            if (!result.sheetSaved) {
-              result.error = sheetResult?.error || '시트 저장 실패'
-              console.error('시트 저장 실패:', result.error)
-            } else {
-              result.spreadsheetId = sheetResult?.spreadsheetId || spreadsheetId
-              result.spreadsheetUrl = sheetResult?.spreadsheetUrl || null
-              result.sheetUpdates = sheetResult?.updates || null
-            }
-          } else {
-            const detail =
-              authState.spreadsheetError ||
-              '스프레드시트 권한을 확인하고 다시 로그인해주세요.'
-            result.error = `스프레드시트 ID를 가져오지 못했습니다.\n${detail}`
-            console.error(result.error)
-          }
-        } else {
-          result.error = '로그인이 필요합니다.'
-        }
 
         if (accessToken) {
           const { getWorkplaceById } = useWorkplaceStore.getState()
@@ -104,6 +73,8 @@ export const useScheduleStore = create(
               console.error('캘린더 추가 실패:', result.error)
             }
           }
+        } else {
+          result.error = '로그인이 필요합니다.'
         }
 
         set((state) => ({
@@ -119,7 +90,6 @@ export const useScheduleStore = create(
       updateSchedule: async (id, updates) => {
         let updatedSchedule = null
         const result = {
-          sheetUpdated: false,
           calendarUpdated: false,
           calendarCreated: false,
           error: null,
@@ -131,25 +101,6 @@ export const useScheduleStore = create(
             return updatedSchedule
           }),
         }))
-
-        if (updatedSchedule) {
-          const { accessToken } = useAuthStore.getState()
-          if (accessToken) {
-            const spreadsheetId = await useAuthStore.getState().ensureSpreadsheetId()
-            if (spreadsheetId) {
-              const sheetResult = await updateScheduleInSheet(
-                accessToken,
-                spreadsheetId,
-                updatedSchedule
-              )
-              result.sheetUpdated = sheetResult?.success === true
-              if (!result.sheetUpdated) {
-                result.error = sheetResult?.error || '시트 수정 실패'
-                console.error('시트 수정 실패:', result.error)
-              }
-            }
-          }
-        }
 
         if (updatedSchedule) {
           const { accessToken } = useAuthStore.getState()
@@ -200,20 +151,6 @@ export const useScheduleStore = create(
       deleteSchedule: async (id) => {
         const schedule = get().schedules.find((s) => s.id === id)
         const { accessToken } = useAuthStore.getState()
-
-        if (accessToken && schedule?.id) {
-          const spreadsheetId = await useAuthStore.getState().ensureSpreadsheetId()
-          if (spreadsheetId) {
-            const sheetResult = await deleteScheduleFromSheet(
-              accessToken,
-              spreadsheetId,
-              schedule.id
-            )
-            if (!sheetResult.success) {
-              console.error('시트 삭제 실패:', sheetResult.error)
-            }
-          }
-        }
 
         if (accessToken && schedule?.calendarEventId) {
           const calendarResult = await deleteEventFromCalendar(

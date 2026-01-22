@@ -19,6 +19,8 @@ function ScheduleManager() {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [selectedDates, setSelectedDates] = useState([])
   const [calendarMonth, setCalendarMonth] = useState(new Date())
+  const [listMonth, setListMonth] = useState(new Date())
+  const [viewMode, setViewMode] = useState('list')
 
   function getEmptyForm() {
     return {
@@ -56,7 +58,6 @@ function ScheduleManager() {
       setEditingId(null)
     } else {
       const datesToAdd = selectedDates.slice().sort()
-      let failedSheetCount = 0
       let failedCalendarCount = 0
       let successCount = 0
       let lastError = ''
@@ -67,10 +68,7 @@ function ScheduleManager() {
           date,
           source: 'manual',
         })
-        if (!result?.sheetSaved) {
-          failedSheetCount += 1
-          lastError = result?.error || lastError
-        } else if (!result?.calendarSaved) {
+        if (!result?.calendarSaved) {
           failedCalendarCount += 1
           lastError = result?.error || lastError
         } else {
@@ -78,11 +76,8 @@ function ScheduleManager() {
         }
       }
 
-      if (failedSheetCount > 0 || failedCalendarCount > 0) {
+      if (failedCalendarCount > 0) {
         const errors = []
-        if (failedSheetCount > 0) {
-          errors.push(`시트 저장 실패 ${failedSheetCount}건`)
-        }
         if (failedCalendarCount > 0) {
           errors.push(`캘린더 추가 실패 ${failedCalendarCount}건`)
         }
@@ -96,7 +91,7 @@ function ScheduleManager() {
         alert(
           datesToAdd.length > 1
             ? `${datesToAdd.length}개의 일정이 추가되었습니다.`
-            : '근무 기록이 시트에 저장되었습니다.'
+            : '근무 일정이 추가되었습니다.'
         )
       }
     }
@@ -189,7 +184,6 @@ function ScheduleManager() {
             : workplaces[parseInt(workplaceId) - 1]
           
           // 일정 추가
-          let failedSheetCount = 0
           let failedCalendarCount = 0
           let lastError = ''
           for (const schedule of schedules) {
@@ -205,21 +199,15 @@ function ScheduleManager() {
                   (schedule.uncertain ? '(AI 분석 - 확인 필요)' : '(AI 분석)'),
                 source: 'image',
               })
-              if (!result?.sheetSaved) {
-                failedSheetCount += 1
-                lastError = result?.error || lastError
-              } else if (!result?.calendarSaved) {
+              if (!result?.calendarSaved) {
                 failedCalendarCount += 1
                 lastError = result?.error || lastError
               }
             }
           }
 
-          if (failedSheetCount > 0 || failedCalendarCount > 0) {
+          if (failedCalendarCount > 0) {
             const errors = []
-            if (failedSheetCount > 0) {
-              errors.push(`시트 저장 실패 ${failedSheetCount}건`)
-            }
             if (failedCalendarCount > 0) {
               errors.push(`캘린더 추가 실패 ${failedCalendarCount}건`)
             }
@@ -245,8 +233,16 @@ function ScheduleManager() {
     }
   }
 
+  const listMonthStart = new Date(listMonth.getFullYear(), listMonth.getMonth(), 1)
+  const listMonthEnd = new Date(listMonth.getFullYear(), listMonth.getMonth() + 1, 0)
+
+  const visibleSchedules = schedules.filter((schedule) => {
+    const date = new Date(schedule.date)
+    return date >= listMonthStart && date <= listMonthEnd
+  })
+
   // 일정을 날짜별로 그룹화
-  const groupedSchedules = schedules.reduce((acc, schedule) => {
+  const groupedSchedules = visibleSchedules.reduce((acc, schedule) => {
     const date = schedule.date
     if (!acc[date]) {
       acc[date] = []
@@ -256,8 +252,8 @@ function ScheduleManager() {
   }, {})
 
   // 날짜를 최신순으로 정렬
-  const sortedDates = Object.keys(groupedSchedules).sort((a, b) => 
-    new Date(b) - new Date(a)
+  const sortedDates = Object.keys(groupedSchedules).sort(
+    (a, b) => new Date(b) - new Date(a)
   )
 
   const getWorkSummary = (schedule, workplace) => {
@@ -279,6 +275,7 @@ function ScheduleManager() {
   }
 
   const calendarCells = buildCalendarCells(calendarMonth)
+  const listCalendarCells = buildCalendarCells(listMonth)
   const selectedSet = new Set(selectedDates)
   const selectedDatesSorted = selectedDates.slice().sort()
 
@@ -296,11 +293,30 @@ function ScheduleManager() {
     })
   }
 
+  const moveListMonth = (offset) => {
+    setListMonth((prev) => {
+      const next = new Date(prev)
+      next.setMonth(prev.getMonth() + offset)
+      return next
+    })
+  }
+
   return (
     <div className="schedule-manager">
       <div className="page-header">
-        <h1>근무 일정 관리</h1>
-        <p>근무 일정을 추가하고 관리하세요</p>
+        <div className="page-header-row">
+          <div>
+            <h1>근무 일정 관리</h1>
+            <p>근무 일정을 추가하고 관리하세요</p>
+          </div>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => setViewMode((prev) => (prev === 'list' ? 'calendar' : 'list'))}
+          >
+            {viewMode === 'list' ? '달력으로 보기' : '표 상태로 보기'}
+          </button>
+        </div>
       </div>
 
       <div className="action-buttons">
@@ -487,84 +503,183 @@ function ScheduleManager() {
         </div>
       )}
 
-      {/* 일정 목록 */}
-      <div className="schedules-list">
-        {schedules.length === 0 ? (
-          <div className="empty-state">
-            <p>등록된 근무 일정이 없습니다.</p>
-            <p className="empty-hint">
-              수동으로 추가하거나 이미지를 업로드해보세요.
-            </p>
+      {viewMode === 'calendar' ? (
+        <div className="calendar-view">
+          <div className="calendar-view-header">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => moveListMonth(-1)}
+              aria-label="이전 달"
+            >
+              &lt;
+            </button>
+            <div className="calendar-view-title">
+              {formatMonthLabel(listMonth)}
+            </div>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => moveListMonth(1)}
+              aria-label="다음 달"
+            >
+              &gt;
+            </button>
           </div>
-        ) : (
-          sortedDates.map((date) => {
-            const dateSchedules = groupedSchedules[date]
-            return (
-              <div key={date} className="date-group">
-                <div className="date-header">
-                  <h3>{formatDate(date)}</h3>
-                  <span className="schedule-count">
-                    {dateSchedules.length}개 근무
-                  </span>
-                </div>
-                <div className="schedule-items">
-                  {dateSchedules.map((schedule) => {
-                    const workplace = workplaces.find(
-                      (w) => w.id === schedule.workplaceId
-                    )
-                    const summary = getWorkSummary(schedule, workplace)
-                    const breakMinutes = summary?.breakMinutes ?? 0
-                    const effectiveMinutes = summary?.effectiveMinutes ?? 0
-                    return (
-                      <div key={schedule.id} className="schedule-item">
+          <div className="calendar-weekdays calendar-view-weekdays">
+            {CALENDAR_WEEKDAYS.map((day) => (
+              <span key={`view-${day}`}>{day}</span>
+            ))}
+          </div>
+          <div className="calendar-view-grid">
+            {listCalendarCells.map((cell, index) => {
+              if (!cell) {
+                return (
+                  <div key={`view-empty-${index}`} className="calendar-view-cell empty" />
+                )
+              }
+              const daySchedules = groupedSchedules[cell.dateKey] || []
+              return (
+                <div key={cell.dateKey} className="calendar-view-cell">
+                  <div className="calendar-view-day">{cell.day}</div>
+                  <div className="calendar-view-events">
+                    {daySchedules.slice(0, 3).map((schedule) => {
+                      const workplace = workplaces.find(
+                        (w) => w.id === schedule.workplaceId
+                      )
+                      return (
                         <div
-                          className="schedule-color"
+                          key={schedule.id}
+                          className="calendar-view-chip"
                           style={{
-                            backgroundColor: workplace?.color || '#4285f4',
+                            borderColor: workplace?.color || '#4285f4',
                           }}
-                        />
-                        <div className="schedule-content">
-                          <div className="schedule-main">
-                            <h4>{workplace?.name || '알 수 없음'}</h4>
-                            <div className="schedule-time">
-                              {schedule.startTime} - {schedule.endTime}
-                            </div>
-                          </div>
-                          <div className="schedule-break">
-                            휴게시간: {breakMinutes}분
-                          </div>
-                          <div className="schedule-total">
-                            총 근무시간: {formatMinutes(effectiveMinutes)}
-                          </div>
-                          {schedule.memo && (
-                            <div className="schedule-memo">{schedule.memo}</div>
-                          )}
+                        >
+                          <span className="calendar-view-chip-name">
+                            {workplace?.name || '알 수 없음'}
+                          </span>
+                          <span className="calendar-view-chip-time">
+                            {schedule.startTime}-{schedule.endTime}
+                          </span>
                         </div>
-                        <div className="schedule-actions">
-                          <button
-                            className="btn-icon"
-                            onClick={() => handleEdit(schedule)}
-                            title="수정"
-                          >
-                            ✏️
-                          </button>
-                          <button
-                            className="btn-icon"
-                            onClick={() => handleDelete(schedule.id)}
-                            title="삭제"
-                          >
-                            🗑️
-                          </button>
-                        </div>
+                      )
+                    })}
+                    {daySchedules.length > 3 && (
+                      <div className="calendar-view-more">
+                        +{daySchedules.length - 3}개
                       </div>
-                    )
-                  })}
+                    )}
+                  </div>
                 </div>
-              </div>
-            )
-          })
-        )}
-      </div>
+              )
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="schedules-list">
+          <div className="list-month-selector">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => moveListMonth(-1)}
+              aria-label="이전 달"
+            >
+              &lt;
+            </button>
+            <div className="list-month-label">
+              {`${listMonth.getMonth() + 1}월`}
+            </div>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => moveListMonth(1)}
+              aria-label="다음 달"
+            >
+              &gt;
+            </button>
+          </div>
+
+          {schedules.length === 0 ? (
+            <div className="empty-state">
+              <p>등록된 근무 일정이 없습니다.</p>
+              <p className="empty-hint">
+                수동으로 추가하거나 이미지를 업로드해보세요.
+              </p>
+            </div>
+          ) : visibleSchedules.length === 0 ? (
+            <div className="empty-state">
+              <p>선택한 월에 근무 일정이 없습니다.</p>
+            </div>
+          ) : (
+            sortedDates.map((date) => {
+              const dateSchedules = groupedSchedules[date]
+              return (
+                <div key={date} className="date-group">
+                  <div className="date-header">
+                    <h3>{formatDate(date)}</h3>
+                    <span className="schedule-count">
+                      {dateSchedules.length}개 근무
+                    </span>
+                  </div>
+                  <div className="schedule-items">
+                    {dateSchedules.map((schedule) => {
+                      const workplace = workplaces.find(
+                        (w) => w.id === schedule.workplaceId
+                      )
+                      const summary = getWorkSummary(schedule, workplace)
+                      const breakMinutes = summary?.breakMinutes ?? 0
+                      const effectiveMinutes = summary?.effectiveMinutes ?? 0
+                      return (
+                        <div key={schedule.id} className="schedule-item">
+                          <div
+                            className="schedule-color"
+                            style={{
+                              backgroundColor: workplace?.color || '#4285f4',
+                            }}
+                          />
+                          <div className="schedule-content">
+                            <div className="schedule-main">
+                              <h4>{workplace?.name || '알 수 없음'}</h4>
+                              <div className="schedule-time">
+                                {schedule.startTime} - {schedule.endTime}
+                              </div>
+                            </div>
+                            <div className="schedule-break">
+                              휴게시간: {breakMinutes}분
+                            </div>
+                            <div className="schedule-total">
+                              총 근무시간: {formatMinutes(effectiveMinutes)}
+                            </div>
+                            {schedule.memo && (
+                              <div className="schedule-memo">{schedule.memo}</div>
+                            )}
+                          </div>
+                          <div className="schedule-actions">
+                            <button
+                              className="btn-icon"
+                              onClick={() => handleEdit(schedule)}
+                              title="수정"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              className="btn-icon"
+                              onClick={() => handleDelete(schedule.id)}
+                              title="삭제"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+      )}
     </div>
   )
 }
