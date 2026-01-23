@@ -1,8 +1,25 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { addEventToCalendar, deleteEventFromCalendar, updateEventInCalendar } from '../api/googleCalendar'
+import {
+  addEventToCalendar,
+  deleteEventFromCalendar,
+  isHolidayInGoogleCalendar,
+  updateEventInCalendar,
+} from '../api/googleCalendar'
 import { useAuthStore } from './authStore'
 import { useWorkplaceStore } from './workplaceStore'
+
+const holidayCheckCache = new Map()
+
+async function getHolidayFlag(accessToken, dateKey) {
+  if (!accessToken || !dateKey) return false
+  const key = String(dateKey)
+  const cached = holidayCheckCache.get(key)
+  if (cached) return cached
+  const promise = isHolidayInGoogleCalendar(accessToken, key).catch(() => false)
+  holidayCheckCache.set(key, promise)
+  return promise
+}
 
 /**
  * 근무 일정 데이터 구조:
@@ -15,7 +32,8 @@ import { useWorkplaceStore } from './workplaceStore'
  *   memo: string,
  *   createdAt: timestamp,
  *   source: 'manual' | 'image' | 'calendar',
- *   calendarEventId?: string
+ *   calendarEventId?: string,
+ *   isHoliday?: boolean
  * }
  */
 
@@ -39,6 +57,32 @@ export const useScheduleStore = create(
 
       setHydrated: (value) => set({ hydrated: value }),
 
+      backfillHolidayFlags: async () => {
+        const { accessToken } = useAuthStore.getState()
+        if (!accessToken) return
+
+        const current = get().schedules || []
+        const targets = current.filter(
+          (s) => typeof s?.date === 'string' && s?.isHoliday !== true && s?.isHoliday !== false
+        )
+        if (targets.length === 0) return
+
+        const uniqueDates = Array.from(new Set(targets.map((s) => s.date)))
+        const results = new Map()
+        for (const dateKey of uniqueDates) {
+          results.set(dateKey, await getHolidayFlag(accessToken, dateKey))
+        }
+
+        set((state) => ({
+          schedules: state.schedules.map((s) => {
+            if (typeof s?.date !== 'string') return s
+            if (s?.isHoliday === true || s?.isHoliday === false) return s
+            if (!results.has(s.date)) return s
+            return { ...s, isHoliday: results.get(s.date) === true }
+          }),
+        }))
+      },
+
       // 근무 일정 관리
       addSchedule: async (schedule) => {
         const newSchedule = {
@@ -54,6 +98,10 @@ export const useScheduleStore = create(
         let calendarAttempted = false
 
         if (accessToken) {
+          // 휴일 플래그는 "구글 캘린더 공휴일 등록 여부" 기준으로 설정
+          if (typeof newSchedule.date === 'string') {
+            newSchedule.isHoliday = await getHolidayFlag(accessToken, newSchedule.date)
+          }
           const { getWorkplaceById } = useWorkplaceStore.getState()
           const workplace = getWorkplaceById(newSchedule.workplaceId)
           if (workplace) {
@@ -107,6 +155,22 @@ export const useScheduleStore = create(
           const { getWorkplaceById } = useWorkplaceStore.getState()
           const workplace = getWorkplaceById(updatedSchedule.workplaceId)
           if (accessToken && workplace) {
+            // 날짜가 바뀌었거나 기존에 휴일 정보가 없으면 다시 계산
+            if (typeof updatedSchedule.date === 'string') {
+              const shouldRecalc =
+                !('isHoliday' in updatedSchedule) ||
+                updates?.date ||
+                updatedSchedule.isHoliday === null ||
+                updatedSchedule.isHoliday === undefined
+              if (shouldRecalc) {
+                updatedSchedule.isHoliday = await getHolidayFlag(accessToken, updatedSchedule.date)
+                set((state) => ({
+                  schedules: state.schedules.map((s) =>
+                    s.id === updatedSchedule.id ? { ...s, isHoliday: updatedSchedule.isHoliday } : s
+                  ),
+                }))
+              }
+            }
             if (updatedSchedule.calendarEventId) {
               const calendarResult = await updateEventInCalendar(
                 accessToken,
@@ -197,9 +261,12 @@ export const useScheduleStore = create(
       },
       
       getSchedulesByDateRange: (startDate, endDate) => {
+        // date는 'YYYY-MM-DD' 형식이므로 문자열 범위 비교가 가장 안전합니다(타임존 영향 없음).
+        const startKey = String(startDate || '')
+        const endKey = String(endDate || '')
         return get().schedules.filter((s) => {
-          const date = new Date(s.date)
-          return date >= new Date(startDate) && date <= new Date(endDate)
+          const dateKey = String(s.date || '')
+          return dateKey >= startKey && dateKey <= endKey
         })
       },
       
@@ -223,6 +290,14 @@ export const useScheduleStore = create(
       name: 'schedule-storage',
       onRehydrateStorage: () => (state) => {
         state?.setHydrated(true)
+        // 로그인 토큰이 이미 있는 경우, 기존 일정의 휴일 플래그를 백필합니다.
+        setTimeout(() => {
+          try {
+            state?.backfillHolidayFlags?.()
+          } catch (e) {
+            console.error('휴일 플래그 백필 실패:', e)
+          }
+        }, 0)
       },
     }
   )

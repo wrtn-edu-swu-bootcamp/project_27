@@ -89,7 +89,10 @@ export function calculateNightPay(
 
 /**
  * 주휴수당 계산
- * 주 15시간 이상 근무 시 1일치 급여
+ * 주 15시간 이상 근무 시 근무시간에 비례하여 지급
+ *
+ * 참고 공식(일반적 계산):
+ * (주간 총 근무시간 ÷ 40시간) × 8시간 × 시급
  */
 export function calculateWeeklyHolidayPay(weeklyMinutes, hourlyWage, settings) {
   if (!settings?.weeklyHolidayPay?.supported || !settings?.weeklyHolidayPay?.userConfirmed) {
@@ -99,30 +102,30 @@ export function calculateWeeklyHolidayPay(weeklyMinutes, hourlyWage, settings) {
   const weeklyHours = weeklyMinutes / 60
   
   // 주 15시간 이상 근무 시 적용
-  if (weeklyHours >= 15) {
-    return Math.floor(hourlyWage * 8) // 1일 8시간 기준
+  if (weeklyHours < 15) {
+    return 0
   }
+
+  // 40시간 기준 비례 계산 (최대 8시간분)
+  const cappedWeeklyHours = Math.min(weeklyHours, 40)
+  const weeklyHolidayHours = (cappedWeeklyHours / 40) * 8
+  return Math.floor(weeklyHolidayHours * hourlyWage)
   
-  return 0
 }
 
 /**
  * 휴일 수당 계산 (기본급의 50%)
  */
-export function calculateHolidayPay(date, minutes, hourlyWage, settings) {
+export function calculateHolidayPay(date, minutes, hourlyWage, settings, isHoliday) {
   if (!settings?.holidayPay?.supported || !settings?.holidayPay?.userConfirmed) {
     return 0
   }
-  
-  const dayOfWeek = new Date(date).getDay()
-  
-  // TODO: 법정공휴일 체크 로직 추가 필요
-  if (dayOfWeek === 0 || dayOfWeek === 6) {
-    const hours = minutes / 60
-    return Math.floor(hours * hourlyWage * 0.5)
-  }
 
-  return 0
+  // 휴일 기준: "구글 캘린더에 공휴일(휴일 캘린더)로 등록된 날"만 휴일로 인정
+  if (!isHoliday) return 0
+
+  const hours = minutes / 60
+  return Math.floor(hours * hourlyWage * 0.5)
 }
 
 /**
@@ -135,15 +138,20 @@ export function calculateBusinessIncomeTax(totalPay) {
 /**
  * 급여 상세 계산
  */
-export function calculateSalaryDetail(schedules, workplace) {
+export function calculateSalaryDetail(schedules, workplace, options = {}) {
   let totalMinutes = 0
   let basicPay = 0
   let nightPay = 0
   let holidayPay = 0
   let weeklyHolidayPay = 0
   
-  // 주별 근무 시간 집계 (주휴수당 계산용)
-  const weeklyMinutes = {}
+  // 주휴수당은 '주' 단위로 계산되므로,
+  // 선택한 기간(schedules)이 주의 일부만 포함하는 경우에도
+  // 해당 주의 전체 근무시간(가능하면 allSchedulesForWeeklyHolidayPay 기반)으로 판정/계산합니다.
+  const allSchedulesForWeeklyHolidayPay =
+    options?.allSchedulesForWeeklyHolidayPay || schedules
+
+  const targetWeekKeys = new Set()
   
   schedules.forEach((schedule) => {
     const minutes = calculateWorkMinutes(schedule.startTime, schedule.endTime)
@@ -169,16 +177,27 @@ export function calculateSalaryDetail(schedules, workplace) {
       schedule.date,
       effectiveMinutes,
       workplace.hourlyWage,
-      workplace.settings
+      workplace.settings,
+      schedule?.isHoliday === true
     )
-    
-    // 주별 근무 시간 집계
+
+    // 기간 내 포함된 주(week)를 기록
+    targetWeekKeys.add(getWeekKey(schedule.date))
+  })
+
+  // 전체(또는 제공된) 스케줄로 주별 근무 시간 집계
+  const weeklyMinutesAll = {}
+  allSchedulesForWeeklyHolidayPay.forEach((schedule) => {
+    const minutes = calculateWorkMinutes(schedule.startTime, schedule.endTime)
+    const breakMinutes = calculateBreakMinutes(minutes, workplace)
+    const effectiveMinutes = Math.max(0, minutes - breakMinutes)
     const weekKey = getWeekKey(schedule.date)
-    weeklyMinutes[weekKey] = (weeklyMinutes[weekKey] || 0) + effectiveMinutes
+    weeklyMinutesAll[weekKey] = (weeklyMinutesAll[weekKey] || 0) + effectiveMinutes
   })
   
   // 주휴수당 계산
-  Object.values(weeklyMinutes).forEach((minutes) => {
+  targetWeekKeys.forEach((weekKey) => {
+    const minutes = weeklyMinutesAll[weekKey] || 0
     weeklyHolidayPay += calculateWeeklyHolidayPay(
       minutes,
       workplace.hourlyWage,
@@ -293,12 +312,19 @@ function calculateInsuranceDeduction(totalBeforeTax, settings) {
  * 주차 키 생성 (YYYY-Www)
  */
 function getWeekKey(dateString) {
+  // 월/기간 경계에서도 안정적으로 묶이도록 "해당 주의 시작일(월요일)"을 키로 사용
   const date = new Date(dateString)
-  const year = date.getFullYear()
-  const firstDayOfYear = new Date(year, 0, 1)
-  const days = Math.floor((date - firstDayOfYear) / (24 * 60 * 60 * 1000))
-  const week = Math.ceil((days + firstDayOfYear.getDay() + 1) / 7)
-  return `${year}-W${String(week).padStart(2, '0')}`
+  date.setHours(0, 0, 0, 0)
+
+  // 월요일 기준 (0=일,1=월,...6=토)
+  const day = date.getDay()
+  const diffFromMonday = (day + 6) % 7
+  date.setDate(date.getDate() - diffFromMonday)
+
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
 
 /**

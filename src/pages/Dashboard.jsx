@@ -36,7 +36,10 @@ function Dashboard() {
       )
 
       if (workplaceSchedules.length > 0) {
-        const salaryDetail = calculateSalaryDetail(workplaceSchedules, workplace)
+        const allWorkplaceSchedules = schedules.filter((s) => s.workplaceId === workplace.id)
+        const salaryDetail = calculateSalaryDetail(workplaceSchedules, workplace, {
+          allSchedulesForWeeklyHolidayPay: allWorkplaceSchedules,
+        })
         
         totalHours += salaryDetail.totalHours
         totalPay += salaryDetail.totalAfterTax
@@ -146,11 +149,12 @@ function Dashboard() {
                       </span>
                     </div>
                   )}
-                  {data.weeklyHolidayPay > 0 && (
+                  {data.workplace?.settings?.weeklyHolidayPay?.userConfirmed && (
                     <div className="detail-row">
                       <span>주휴수당:</span>
                       <span className="extra-pay">
-                        +{data.weeklyHolidayPay.toLocaleString()}원
+                        {data.weeklyHolidayPay > 0 ? '+' : ''}
+                        {data.weeklyHolidayPay.toLocaleString()}원
                       </span>
                     </div>
                   )}

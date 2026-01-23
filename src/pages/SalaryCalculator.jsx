@@ -55,7 +55,12 @@ function SalaryCalculator() {
 
       if (workplaceSchedules.length === 0) return
 
-      const detail = calculateSalaryDetail(workplaceSchedules, workplace)
+      const allWorkplaceSchedules = schedules.filter(
+        (schedule) => schedule.workplaceId === workplace.id
+      )
+      const detail = calculateSalaryDetail(workplaceSchedules, workplace, {
+        allSchedulesForWeeklyHolidayPay: allWorkplaceSchedules,
+      })
       totalHours += detail.totalHours
       totalPay += detail.totalAfterTax
       totalDays += workplaceSchedules.length
@@ -229,14 +234,15 @@ function SalaryCalculator() {
                         </div>
                       )}
 
-                      {data.weeklyHolidayPay > 0 && (
+                      {data.workplace?.settings?.weeklyHolidayPay?.userConfirmed && (
                         <div className="breakdown-item extra">
                           <div className="breakdown-label">
                             <span className="label-text">주휴수당</span>
                             <span className="label-hint">주 15시간 이상 근무 시</span>
                           </div>
                           <div className="breakdown-value extra-value">
-                            +{data.weeklyHolidayPay.toLocaleString()}원
+                            {data.weeklyHolidayPay > 0 ? '+' : ''}
+                            {data.weeklyHolidayPay.toLocaleString()}원
                           </div>
                         </div>
                       )}
@@ -335,10 +341,10 @@ function SalaryCalculator() {
                 <strong>야간수당:</strong> 22:00~06:00 근무 시 기본급의 50% 추가
               </li>
               <li>
-                <strong>휴일수당:</strong> 법정공휴일 근무 시 기본급의 50% 추가
+                <strong>휴일수당:</strong> 구글 캘린더에 “공휴일(휴일 캘린더)”로 등록된 날 근무 시 기본급의 50% 추가
               </li>
               <li>
-                <strong>주휴수당:</strong> 주 15시간 이상 근무 시 1일치 급여(8시간) 지급
+                <strong>주휴수당:</strong> 주 15시간 이상 근무 시 근무시간 비례 지급 \((주간 근무시간 ÷ 40) × 8시간 × 시급\)
               </li>
               <li>
                 <strong>3.3% 공제:</strong> 소득세 3% + 지방소득세 0.3%

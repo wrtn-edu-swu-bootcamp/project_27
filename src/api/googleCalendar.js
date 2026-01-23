@@ -7,6 +7,8 @@ import { useAuthStore } from '../store/authStore'
 const CALENDAR_API_URL = 'https://www.googleapis.com/calendar/v3'
 
 let lastAuthAlertAt = 0
+let cachedHolidayCalendarIds = null
+let cachedHolidayCalendarIdsAt = 0
 
 function handleUnauthorizedResponse(response) {
   if (response.status !== 401) return
@@ -250,4 +252,129 @@ function addDays(dateString, daysToAdd) {
   const nextMonth = String(date.getMonth() + 1).padStart(2, '0')
   const nextDay = String(date.getDate()).padStart(2, '0')
   return `${nextYear}-${nextMonth}-${nextDay}`
+}
+
+function buildRfc3339Seoul(dateString, time) {
+  // dateString: YYYY-MM-DD, time: HH:mm:ss
+  return `${dateString}T${time}+09:00`
+}
+
+function isDateWithinAllDayEvent(dateKey, startDate, endDate) {
+  // all-day 이벤트는 end.date가 "다음날" (exclusive)로 내려옴
+  if (!dateKey || !startDate || !endDate) return false
+  return String(dateKey) >= String(startDate) && String(dateKey) < String(endDate)
+}
+
+async function getHolidayCalendarIds(accessToken) {
+  const now = Date.now()
+  if (cachedHolidayCalendarIds && now - cachedHolidayCalendarIdsAt < 6 * 60 * 60 * 1000) {
+    return cachedHolidayCalendarIds
+  }
+
+  // 잘 알려진 한국 공휴일 캘린더 ID (사용자가 구독하지 않으면 접근 불가할 수 있음)
+  const known = [
+    'ko.south_korea#holiday@group.v.calendar.google.com',
+    'ko.south_korea.official#holiday@group.v.calendar.google.com',
+  ]
+
+  try {
+    const response = await fetch(
+      `${CALENDAR_API_URL}/users/me/calendarList?maxResults=250`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }
+    )
+    if (!response.ok) {
+      handleUnauthorizedResponse(response)
+      throw new Error('캘린더 목록 조회 실패')
+    }
+    const data = await response.json()
+    const items = Array.isArray(data?.items) ? data.items : []
+    const ids = new Set()
+
+    known.forEach((id) => ids.add(id))
+
+    items.forEach((cal) => {
+      const id = cal?.id
+      const summary = String(cal?.summary || '')
+      const lower = summary.toLowerCase()
+      if (!id) return
+
+      if (String(id).includes('#holiday@group.v.calendar.google.com')) {
+        ids.add(id)
+        return
+      }
+
+      if (
+        summary.includes('공휴일') ||
+        summary.includes('휴일') ||
+        lower.includes('holiday') ||
+        lower.includes('holidays')
+      ) {
+        ids.add(id)
+      }
+    })
+
+    cachedHolidayCalendarIds = Array.from(ids)
+    cachedHolidayCalendarIdsAt = now
+    return cachedHolidayCalendarIds
+  } catch (error) {
+    console.error('공휴일 캘린더 목록 조회 오류:', error)
+    // 실패 시에도 known ID는 시도할 수 있게 반환
+    cachedHolidayCalendarIds = known
+    cachedHolidayCalendarIdsAt = now
+    return cachedHolidayCalendarIds
+  }
+}
+
+/**
+ * 특정 날짜(YYYY-MM-DD)가 Google Calendar에서 "공휴일(휴일 캘린더)"로 등록되어 있는지 확인
+ */
+export async function isHolidayInGoogleCalendar(accessToken, dateKey) {
+  if (!accessToken || !dateKey) return false
+
+  const calendarIds = await getHolidayCalendarIds(accessToken)
+  if (!calendarIds || calendarIds.length === 0) return false
+
+  // 경계 포함 문제를 피하기 위해 전날~다음날 범위로 조회 후 overlap 체크
+  const prevDate = addDays(dateKey, -1)
+  const nextDate = addDays(dateKey, 1)
+
+  const timeMin = buildRfc3339Seoul(prevDate, '00:00:00')
+  const timeMax = buildRfc3339Seoul(nextDate, '23:59:59')
+
+  for (const calendarId of calendarIds) {
+    try {
+      const url =
+        `${CALENDAR_API_URL}/calendars/${encodeURIComponent(calendarId)}/events` +
+        `?singleEvents=true&orderBy=startTime&maxResults=2500` +
+        `&timeMin=${encodeURIComponent(timeMin)}` +
+        `&timeMax=${encodeURIComponent(timeMax)}`
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      })
+
+      if (!response.ok) {
+        // 구독하지 않은 캘린더는 404/403일 수 있으니 무시하고 다음 캘린더로
+        if (response.status === 404 || response.status === 403) continue
+        handleUnauthorizedResponse(response)
+        continue
+      }
+
+      const data = await response.json()
+      const items = Array.isArray(data?.items) ? data.items : []
+      for (const ev of items) {
+        const startDate = ev?.start?.date
+        const endDate = ev?.end?.date
+        if (startDate && endDate && isDateWithinAllDayEvent(dateKey, startDate, endDate)) {
+          return true
+        }
+      }
+    } catch (error) {
+      // 네트워크/권한 문제 등은 조용히 넘어가고 false로 처리
+      console.error('공휴일 조회 오류:', error)
+    }
+  }
+
+  return false
 }

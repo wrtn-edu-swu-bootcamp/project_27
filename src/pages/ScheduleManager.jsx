@@ -487,15 +487,15 @@ function ScheduleManager() {
     }
   }
 
-  const listMonthStart = new Date(
-    listMonth.getFullYear(),
-    listMonth.getMonth(),
-    1
-  )
-  const listMonthEnd = new Date(
-    listMonth.getFullYear(),
-    listMonth.getMonth() + 1,
-    0
+  // 날짜 필터는 Date 객체 비교를 쓰면 타임존/시간(00:00 vs 09:00 등) 때문에
+  // 월 말(예: 1/31) 일정이 누락될 수 있어 YYYY-MM-DD 문자열 범위 비교로 처리합니다.
+  const listYear = listMonth.getFullYear()
+  const listMonthIndex = listMonth.getMonth()
+  const listMonthStartKey = formatDateParts(listYear, listMonthIndex + 1, 1)
+  const listMonthEndKey = formatDateParts(
+    listYear,
+    listMonthIndex + 1,
+    new Date(listYear, listMonthIndex + 1, 0).getDate()
   )
 
   const filteredSchedules = schedules.filter((schedule) =>
@@ -505,8 +505,9 @@ function ScheduleManager() {
   )
 
   const visibleSchedules = filteredSchedules.filter((schedule) => {
-    const date = new Date(schedule.date)
-    return date >= listMonthStart && date <= listMonthEnd
+    const dateKey = schedule.date
+    if (typeof dateKey !== 'string') return false
+    return dateKey >= listMonthStartKey && dateKey <= listMonthEndKey
   })
 
   // 일정을 날짜별로 그룹화
@@ -520,8 +521,8 @@ function ScheduleManager() {
   }, {})
 
   // 날짜를 최신순으로 정렬
-  const sortedDates = Object.keys(groupedSchedules).sort(
-    (a, b) => new Date(b) - new Date(a)
+  const sortedDates = Object.keys(groupedSchedules).sort((a, b) =>
+    String(b).localeCompare(String(a))
   )
 
   const getWorkSummary = (schedule, workplace) => {
