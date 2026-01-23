@@ -575,7 +575,10 @@ function ScheduleManager() {
         <div className="page-header-row">
           <div>
             <h1>근무 일정 관리</h1>
-            <p>근무 일정을 추가하고 관리하세요</p>
+            <p>
+              근무일정을 추가하고 관리하세요. 해당 근무일정은 모두 구글
+              캘린더와 자동으로 연동됩니다.
+            </p>
           </div>
           <button
             type="button"
