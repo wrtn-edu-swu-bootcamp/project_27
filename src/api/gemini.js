@@ -2,7 +2,8 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY
 const genAI = new GoogleGenerativeAI(API_KEY)
-const MODEL_CANDIDATES = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+// 더 "좋은 품질" 모델을 우선 시도하고, 실패 시 flash 등으로 폴백합니다.
+const MODEL_CANDIDATES = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro']
 
 async function fetchAvailableModels() {
   try {
@@ -46,13 +47,24 @@ function selectModelFromList(models) {
   )
   if (usable.length === 0) return null
 
-  const preferred = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
-  for (const name of preferred) {
-    const match = usable.find((model) => model.name?.endsWith(name))
-    if (match) return match.name
+  // 구독/권한에 따라 모델 목록이 달라지므로, "이름 기반 스코어링"으로 자동 선택합니다.
+  // 목표: 상위 버전(예: 2.5) + pro 계열 우선, flash는 후순위.
+  const scoreModelName = (fullName) => {
+    const name = String(fullName || '').toLowerCase()
+    let score = 0
+    if (name.includes('2.5')) score += 300
+    if (name.includes('2.0')) score += 200
+    if (name.includes('1.5')) score += 150
+    if (name.includes('pro')) score += 60
+    if (name.includes('flash')) score -= 20
+    if (name.includes('exp') || name.includes('experimental')) score -= 5
+    return score
   }
 
-  return usable[0]?.name || null
+  const sorted = usable
+    .slice()
+    .sort((a, b) => scoreModelName(b?.name) - scoreModelName(a?.name))
+  return sorted[0]?.name || null
 }
 
 async function generateWithFallback(parts) {
@@ -124,7 +136,9 @@ export async function analyzeScheduleImage(imageFile, targetName) {
 
 다음 정보를 JSON 형식으로 추출해주세요:
 
-1. 각 근무 일정의 날짜 (YYYY-MM-DD 형식)
+1. 각 근무 일정의 날짜
+  - 연도가 이미지에 명확히 보이면 "YYYY-MM-DD" 형식으로 작성
+  - 연도가 이미지에 없거나 확신할 수 없으면 "yyyy-MM-DD" 형식으로 작성 (앱에서 올해 연도로 보정합니다)
 2. 근무 시작 시간 (HH:mm 형식)
 3. 근무 종료 시간 (HH:mm 형식)
 4. 기타 메모나 특이사항 (있는 경우)
@@ -139,7 +153,7 @@ export async function analyzeScheduleImage(imageFile, targetName) {
 {
   "schedules": [
     {
-      "date": "YYYY-MM-DD",
+      "date": "YYYY-MM-DD 또는 yyyy-MM-DD",
       "startTime": "HH:mm",
       "endTime": "HH:mm",
       "memo": "메모",
@@ -169,6 +183,114 @@ export async function analyzeScheduleImage(imageFile, targetName) {
     }
   } catch (error) {
     console.error('일정표 분석 오류:', error)
+    return {
+      success: false,
+      error: error.message,
+    }
+  }
+}
+
+/**
+ * 이미지 일정표 분석 (2단계)
+ * 1) 이미지 -> 표(마크다운/CSV)로 변환
+ * 2) 표 텍스트 -> 일정 JSON 추출
+ *
+ * 목적: 표 구조가 뚜렷한 일정표에서 추출 안정성을 높이기 위함
+ */
+export async function analyzeScheduleImageViaTable(imageFile, targetName) {
+  try {
+    const base64Image = await fileToBase64(imageFile)
+    const imagePart = {
+      inlineData: {
+        data: base64Image.split(',')[1],
+        mimeType: imageFile.type,
+      },
+    }
+
+    const tablePrompt = `
+당신은 이미지 속 근무 일정표를 "표 텍스트"로 변환하는 역할입니다.
+이 이미지는 여러 명이 함께 있는 근무 일정표일 수 있습니다.
+반드시 이름이 "${targetName}"인 사람의 일정만 포함해서 표를 만들어주세요.
+해당 이름이 보이지 않으면 table을 빈 문자열로 반환해주세요.
+
+규칙:
+- 날짜/시간은 있는 그대로 옮기되, 연도가 이미지에 없거나 확신할 수 없으면 연도를 추측하지 말고 "yyyy"로 표시하세요 (예: yyyy-01-05 또는 yyyy.1.5).
+- 표는 사람이 읽기 쉬운 마크다운 테이블(권장) 또는 CSV로 작성해주세요.
+- 각 행은 "날짜 | 시작 | 종료 | 메모 | uncertain" 형태로 포함해주세요.
+
+응답은 반드시 JSON 하나로만:
+{
+  "table": "마크다운 테이블 또는 CSV 텍스트",
+  "notes": "변환 시 확인이 필요한 내용"
+}
+`
+
+    const { result: tableResult, modelName: tableModelName } =
+      await generateWithFallback([tablePrompt, imagePart])
+    const tableTextRaw = await tableResult.response.text()
+    const tableJsonMatch = tableTextRaw.match(/\{[\s\S]*\}/)
+    if (!tableJsonMatch) {
+      throw new Error('표 변환 단계에서 유효한 JSON 응답을 받지 못했습니다.')
+    }
+    const tableData = JSON.parse(tableJsonMatch[0])
+    const table = (tableData?.table || '').trim()
+    const notes1 = (tableData?.notes || '').trim()
+
+    if (!table) {
+      return {
+        success: true,
+        data: { schedules: [], notes: notes1 },
+        modelName: tableModelName,
+        table,
+        requiresUserConfirmation: true,
+      }
+    }
+
+    const extractPrompt = `
+다음은 근무 일정표를 텍스트 표로 변환한 결과입니다.
+이 표만 보고, 근무 일정 목록을 JSON으로 추출해주세요.
+
+중요:
+- 날짜는 연도가 표에 명확히 있으면 "YYYY-MM-DD"로 작성
+- 연도가 없거나 "yyyy"로 표시되어 있으면 "yyyy-MM-DD"로 작성 (앱에서 올해 연도로 보정합니다)
+- 시간은 "HH:mm"
+- 불확실하면 uncertain: true
+- 읽을 수 없거나 비어 있으면 null
+
+표:
+${table}
+
+응답 형식:
+{
+  "schedules": [
+    { "date": "YYYY-MM-DD 또는 yyyy-MM-DD", "startTime": "HH:mm", "endTime": "HH:mm", "memo": "메모", "uncertain": boolean }
+  ],
+  "notes": "전체적인 확인 필요 내용"
+}
+`
+
+    const { result: extractResult, modelName: extractModelName } =
+      await generateWithFallback(extractPrompt)
+    const extractText = await extractResult.response.text()
+    const extractJsonMatch = extractText.match(/\{[\s\S]*\}/)
+    if (!extractJsonMatch) {
+      throw new Error('표 기반 추출 단계에서 유효한 JSON 응답을 받지 못했습니다.')
+    }
+    const data = JSON.parse(extractJsonMatch[0])
+
+    const notes2 = (data?.notes || '').trim()
+    const mergedNotes = [notes1, notes2].filter(Boolean).join('\n\n')
+
+    return {
+      success: true,
+      data: { ...data, notes: mergedNotes },
+      modelName: extractModelName,
+      table,
+      tableModelName,
+      requiresUserConfirmation: true,
+    }
+  } catch (error) {
+    console.error('일정표 분석(표 변환) 오류:', error)
     return {
       success: false,
       error: error.message,
@@ -235,7 +357,7 @@ export async function getWorkplaceSettingsAdvice(settingType, workplaceName) {
 2. ❌ 지급하지 않음
 3. ❓ 잘 모르겠음 (나중에 확인)
 
-*주말 근무가 있다면 꼭 확인해보세요.
+*공휴일 근무가 있다면 꼭 확인해보세요.
 `,
     }
 
@@ -274,6 +396,12 @@ export async function getAllowanceQnA(question, workplaceName) {
 질문에 대해 쉽고 간단하게 답변하고, 받을 수 있는 수당(주휴/야간/휴일)과 공제(3.3% 공제, 4대보험)를 구분해서 알려주세요.
 불확실한 내용은 "확인 필요"로 표시하고, 필요한 추가 질문이 있으면 1-2개만 제안하세요.
 법률 판단을 단정하지 말고, 최종 확인은 고용주/매니저에게 안내하세요.
+
+사업장 규모(5인 미만/이상) 안내(중요):
+- "상시 근로자 5명 미만(= 5인 미만 사업장)"인 경우, 일반적으로 연장/야간/휴일근로의 가산수당(각 50% 가산)이 법적으로 의무가 아닐 수 있습니다. (단, 실제 지급 여부는 내부 규정/계약/관행에 따라 다를 수 있음)
+- "5인 이상 사업장"의 의미는 보통 "한 사업장(한 가게) 기준 상시 근로자 5명 이상"을 말합니다.
+- 여기서 핵심은 "상시 근로자"이며, 단순히 그날그날 근무하는 인원 수와 다를 수 있습니다.
+- 사용자가 5인 미만/이상 여부를 모르면, 반드시 '확인 필요'로 두고 확인 방법(사장/매니저/근로계약서/사업장 인력 구성)을 짧게 안내하세요.
 
 세금/공제 참고:
 - 3.3% 공제 = 소득세 3% + 지방소득세 0.3% (단기/일용직에서 흔함)

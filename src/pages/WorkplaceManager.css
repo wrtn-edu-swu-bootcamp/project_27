@@ -247,6 +247,59 @@
   color: #202124;
 }
 
+.workplace-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.employment-badge {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid #e8eaed;
+}
+
+.employment-badge.active {
+  background: #e6f4ea;
+  color: #137333;
+  border-color: #ceead6;
+}
+
+.retire-info {
+  margin: 1rem 0 1.25rem;
+  padding: 1rem 1.25rem;
+  border-radius: 12px;
+  background: #f8f9fa;
+  border: 1px solid #e8eaed;
+  color: #3c4043;
+}
+
+.retire-info strong {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: #202124;
+}
+
+.retire-info p {
+  margin: 0;
+  line-height: 1.6;
+  font-size: 0.95rem;
+}
+
+.retire-info.bottom {
+  margin-top: 2rem;
+}
+
+.warning-icon {
+  display: inline-block;
+  margin-right: 0.35rem;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
 .workplace-card-body {
   padding: 1.5rem;
 }
@@ -289,6 +342,7 @@
 }
 
 .btn-edit,
+.btn-retire,
 .btn-delete {
   flex: 1;
   padding: 1rem;
@@ -316,6 +370,117 @@
   background: #fef7e0;
 }
 
+.btn-retire {
+  color: #1f3a8a;
+  border-right: 1px solid #e8eaed;
+}
+
+.btn-retire:hover {
+  background: #eef4ff;
+}
+
+.retired-drawer-fab {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 50;
+  border: none;
+  padding: 0.85rem 1rem;
+  border-radius: 999px;
+  background: #1a73e8;
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 10px 26px rgba(26, 115, 232, 0.25);
+  cursor: pointer;
+}
+
+.retired-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 60;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-end;
+}
+
+.retired-drawer {
+  width: min(520px, 100%);
+  max-height: 75vh;
+  background: #fff;
+  border-top-left-radius: 18px;
+  border-top-right-radius: 18px;
+  padding: 1rem 1.25rem 1.25rem;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.2);
+  overflow: auto;
+}
+
+.retired-drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.retired-drawer-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #202124;
+}
+
+.retired-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.retired-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  border-radius: 12px;
+  border: 1px solid #e8eaed;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.retired-item:hover {
+  background: #f8f9fa;
+}
+
+.retired-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.retired-name {
+  flex: 1;
+  font-weight: 600;
+  color: #202124;
+}
+
+.retired-badge {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #5f6368;
+  background: #f1f3f4;
+  border: 1px solid #e8eaed;
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+}
+
+.retired-restore-btn {
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
 @media (max-width: 768px) {
   .workplace-manager {
     padding: 1rem;
@@ -338,5 +503,10 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 0.5rem;
+  }
+
+  .retired-drawer-fab {
+    right: 1rem;
+    bottom: 1rem;
   }
 }

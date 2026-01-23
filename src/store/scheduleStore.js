@@ -166,6 +166,31 @@ export const useScheduleStore = create(
           schedules: state.schedules.filter((s) => s.id !== id),
         }))
       },
+
+      deleteSchedulesByWorkplaceId: async (workplaceId) => {
+        const schedulesToDelete = get().schedules.filter(
+          (s) => s.workplaceId === workplaceId
+        )
+        if (schedulesToDelete.length === 0) return
+
+        const { accessToken } = useAuthStore.getState()
+        if (accessToken) {
+          for (const schedule of schedulesToDelete) {
+            if (!schedule?.calendarEventId) continue
+            const calendarResult = await deleteEventFromCalendar(
+              accessToken,
+              schedule.calendarEventId
+            )
+            if (!calendarResult.success) {
+              console.error('캘린더 삭제 실패:', calendarResult.error)
+            }
+          }
+        }
+
+        set((state) => ({
+          schedules: state.schedules.filter((s) => s.workplaceId !== workplaceId),
+        }))
+      },
       
       getSchedulesByWorkplace: (workplaceId) => {
         return get().schedules.filter((s) => s.workplaceId === workplaceId)

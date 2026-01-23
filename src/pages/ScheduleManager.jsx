@@ -1,7 +1,11 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useWorkplaceStore } from '../store/workplaceStore'
 import { useScheduleStore } from '../store/scheduleStore'
-import { analyzeScheduleImage, getAvailableGeminiModels } from '../api/gemini'
+import {
+  analyzeScheduleImage,
+  analyzeScheduleImageViaTable,
+  getAvailableGeminiModels,
+} from '../api/gemini'
 import {
   calculateBreakMinutes,
   calculateWorkMinutes,
@@ -15,12 +19,48 @@ function ScheduleManager() {
   const [isAdding, setIsAdding] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [formData, setFormData] = useState(getEmptyForm())
-  const [imageFile, setImageFile] = useState(null)
-  const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [selectedDates, setSelectedDates] = useState([])
   const [calendarMonth, setCalendarMonth] = useState(new Date())
   const [listMonth, setListMonth] = useState(new Date())
   const [viewMode, setViewMode] = useState('list')
+  const [workplaceFilterId, setWorkplaceFilterId] = useState('all')
+  const imageInputRef = useRef(null)
+  const imagePreviewUrlRef = useRef(null)
+
+  const [imageImportOpen, setImageImportOpen] = useState(false)
+  const [imageImportFile, setImageImportFile] = useState(null)
+  const [imageImportPreviewUrl, setImageImportPreviewUrl] = useState('')
+  const [imageTargetName, setImageTargetName] = useState('')
+  const [imageWorkplaceId, setImageWorkplaceId] = useState('')
+  const [imageImportIsAnalyzing, setImageImportIsAnalyzing] = useState(false)
+  const [imageImportIsAdding, setImageImportIsAdding] = useState(false)
+  const [imageImportError, setImageImportError] = useState('')
+  const [imageImportResultMessage, setImageImportResultMessage] = useState('')
+  const [imageImportNotes, setImageImportNotes] = useState('')
+  const [imageImportTable, setImageImportTable] = useState('')
+  const [imageImportModelInfo, setImageImportModelInfo] = useState({
+    usedModel: '',
+    availableModelsInfo: '',
+  })
+  const [imageImportCandidates, setImageImportCandidates] = useState([])
+  const [imageImportSelected, setImageImportSelected] = useState(() => new Set())
+  const imageImportIdRef = useRef(0)
+  const [imageAnalyzeMode, setImageAnalyzeMode] = useState('direct') // 'direct' | 'table'
+
+  const [imageViewerZoom, setImageViewerZoom] = useState(1)
+  const [imageViewerPan, setImageViewerPan] = useState({ x: 0, y: 0 })
+  const imageViewerRef = useRef({
+    isPanning: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    originX: 0,
+    originY: 0,
+  })
+
+  const activeWorkplaces = workplaces.filter(
+    (wp) => (wp.employmentStatus || 'active') !== 'retired'
+  )
 
   function getEmptyForm() {
     return {
@@ -120,123 +160,351 @@ function ScheduleManager() {
     setFormData(getEmptyForm())
     setIsAdding(false)
     setEditingId(null)
-    setImageFile(null)
     setSelectedDates([])
     setCalendarMonth(new Date())
   }
 
-  const handleImageUpload = async (e) => {
-    const file = e.target.files[0]
-    if (!file) return
-
-    const targetName = prompt(
-      '전체 일정표라면 본인 이름/닉네임을 입력해주세요.'
-    )
-    if (!targetName) {
-      setImageFile(null)
-      return
+  const closeImageImport = () => {
+    if (imageImportIsAnalyzing || imageImportIsAdding) return
+    setImageImportOpen(false)
+    setImageImportFile(null)
+    if (imagePreviewUrlRef.current) {
+      URL.revokeObjectURL(imagePreviewUrlRef.current)
+      imagePreviewUrlRef.current = null
     }
-
-    setImageFile(file)
-    setIsAnalyzing(true)
-
-    try {
-      // Gemini API를 직접 호출 (로컬 개발 환경)
-      const result = await analyzeScheduleImage(file, targetName.trim())
-      const availableModelsResult = await getAvailableGeminiModels()
-      
-      if (!result.success) {
-        throw new Error(result.error || '이미지 분석에 실패했습니다.')
-      }
-
-      // 분석 결과를 사용자에게 보여주고 확인 받기
-      if (result.data?.schedules && result.data.schedules.length > 0) {
-        const schedules = result.data.schedules
-        const modelInfo = result.modelName
-          ? `\n\n사용 모델: ${result.modelName}`
-          : '\n\n사용 모델: 알 수 없음'
-        const availableModelsInfo = formatAvailableModelsInfo(
-          availableModelsResult
-        )
-        const confirmMsg = `${schedules.length}개의 일정을 찾았습니다:\n\n${schedules
-          .map((s, i) => {
-            const normalizedDate = normalizeImageScheduleDate(s.date)
-            const displayDate = normalizedDate || s.date || '날짜 없음'
-            return `${i + 1}. ${displayDate} ${s.startTime}-${s.endTime}${s.uncertain ? ' (확인필요)' : ''}`
-          })
-          .join('\n')}${modelInfo}${availableModelsInfo}\n\n이 일정들을 추가하시겠습니까?`
-        
-        if (confirm(confirmMsg)) {
-          // 알바처 선택
-          if (workplaces.length === 0) {
-            alert('먼저 알바처를 등록해주세요.')
-            return
-          }
-          
-          const workplaceId = workplaces.length === 1 
-            ? workplaces[0].id 
-            : prompt(`알바처 번호를 선택하세요:\n${workplaces.map((w, i) => `${i + 1}. ${w.name}`).join('\n')}`)
-          
-          if (!workplaceId) return
-          
-          const selectedWorkplace = workplaces.length === 1 
-            ? workplaces[0] 
-            : workplaces[parseInt(workplaceId) - 1]
-          
-          // 일정 추가
-          let failedCalendarCount = 0
-          let lastError = ''
-          for (const schedule of schedules) {
-            const normalizedDate = normalizeImageScheduleDate(schedule.date)
-            if (normalizedDate && schedule.startTime && schedule.endTime) {
-              const result = await addSchedule({
-                workplaceId: selectedWorkplace.id,
-                date: normalizedDate,
-                startTime: schedule.startTime,
-                endTime: schedule.endTime,
-                memo:
-                  schedule.memo ||
-                  (schedule.uncertain ? '(AI 분석 - 확인 필요)' : '(AI 분석)'),
-                source: 'image',
-              })
-              if (!result?.calendarSaved) {
-                failedCalendarCount += 1
-                lastError = result?.error || lastError
-              }
-            }
-          }
-
-          if (failedCalendarCount > 0) {
-            const errors = []
-            if (failedCalendarCount > 0) {
-              errors.push(`캘린더 추가 실패 ${failedCalendarCount}건`)
-            }
-            const errorText = lastError ? `\n\n오류: ${lastError}` : ''
-            alert(`일정 추가 중 오류가 발생했습니다.\n${errors.join(', ')}${errorText}`)
-          } else {
-            alert(`${schedules.length}개의 일정이 추가되었습니다.`)
-          }
-        }
-      } else {
-        alert('일정을 찾을 수 없습니다. 다른 이미지를 시도해보세요.')
-      }
-      
-      if (result.data?.notes) {
-        console.log('AI 주의사항:', result.data.notes)
-      }
-    } catch (error) {
-      console.error('이미지 분석 오류:', error)
-      alert(`이미지 분석 중 오류가 발생했습니다: ${error.message}`)
-    } finally {
-      setIsAnalyzing(false)
-      setImageFile(null)
+    setImageImportPreviewUrl('')
+    setImageTargetName('')
+    setImageWorkplaceId('')
+    setImageImportIsAnalyzing(false)
+    setImageImportIsAdding(false)
+    setImageImportError('')
+    setImageImportResultMessage('')
+    setImageImportNotes('')
+    setImageImportTable('')
+    setImageImportModelInfo({ usedModel: '', availableModelsInfo: '' })
+    setImageImportCandidates([])
+    setImageImportSelected(new Set())
+    setImageViewerZoom(1)
+    setImageViewerPan({ x: 0, y: 0 })
+    if (imageInputRef.current) {
+      imageInputRef.current.value = ''
     }
   }
 
-  const listMonthStart = new Date(listMonth.getFullYear(), listMonth.getMonth(), 1)
-  const listMonthEnd = new Date(listMonth.getFullYear(), listMonth.getMonth() + 1, 0)
+  const openImageImport = (file) => {
+    setImageImportOpen(true)
+    setImageImportFile(file)
+    if (imagePreviewUrlRef.current) {
+      URL.revokeObjectURL(imagePreviewUrlRef.current)
+      imagePreviewUrlRef.current = null
+    }
+    const nextUrl = URL.createObjectURL(file)
+    imagePreviewUrlRef.current = nextUrl
+    setImageImportPreviewUrl(nextUrl)
+    setImageTargetName('')
+    setImageWorkplaceId(activeWorkplaces.length === 1 ? activeWorkplaces[0].id : '')
+    setImageImportIsAnalyzing(false)
+    setImageImportIsAdding(false)
+    setImageImportError('')
+    setImageImportResultMessage('')
+    setImageImportNotes('')
+    setImageImportTable('')
+    setImageImportModelInfo({ usedModel: '', availableModelsInfo: '' })
+    setImageImportCandidates([])
+    setImageImportSelected(new Set())
+    setImageViewerZoom(1)
+    setImageViewerPan({ x: 0, y: 0 })
+  }
 
-  const visibleSchedules = schedules.filter((schedule) => {
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    openImageImport(file)
+  }
+
+  const runImageAnalyze = async () => {
+    setImageImportError('')
+    setImageImportResultMessage('')
+    setImageImportNotes('')
+    setImageImportTable('')
+    setImageImportCandidates([])
+    setImageImportSelected(new Set())
+
+    if (!imageImportFile) {
+      setImageImportError('이미지 파일을 선택해주세요.')
+      return
+    }
+    const name = imageTargetName.trim()
+    if (!name) {
+      setImageImportError('전체 일정표라면 본인 이름/닉네임을 입력해주세요.')
+      return
+    }
+    if (activeWorkplaces.length === 0) {
+      setImageImportError('먼저 알바처를 등록해주세요.')
+      return
+    }
+    if (!imageWorkplaceId) {
+      setImageImportError('등록할 알바처를 선택해주세요.')
+      return
+    }
+
+    setImageImportIsAnalyzing(true)
+    try {
+      const analyzer =
+        imageAnalyzeMode === 'table'
+          ? analyzeScheduleImageViaTable
+          : analyzeScheduleImage
+      const [result, availableModelsResult] = await Promise.all([
+        analyzer(imageImportFile, name),
+        getAvailableGeminiModels(),
+      ])
+
+      if (!result?.success) {
+        throw new Error(result?.error || '이미지 분석에 실패했습니다.')
+      }
+
+      if (typeof result?.table === 'string' && result.table.trim()) {
+        setImageImportTable(result.table)
+      }
+
+      const found = Array.isArray(result?.data?.schedules)
+        ? result.data.schedules
+        : []
+
+      const usedModel = result.modelName || ''
+      const availableModelsInfo = formatAvailableModelsInfo(availableModelsResult)
+      setImageImportModelInfo({ usedModel, availableModelsInfo })
+
+      const notes = result?.data?.notes ? String(result.data.notes) : ''
+      setImageImportNotes(notes)
+
+      if (found.length === 0) {
+        setImageImportError('일정을 찾을 수 없습니다. 다른 이미지를 시도해보세요.')
+        return
+      }
+
+      const candidates = found.map((s, idx) => {
+        const normalizedDate = normalizeImageScheduleDate(s?.date)
+        const startTime = s?.startTime || ''
+        const endTime = s?.endTime || ''
+        const uncertain = Boolean(s?.uncertain)
+        const date = normalizedDate || ''
+        const isValid = Boolean(date && startTime && endTime)
+        return {
+          id: `${idx}`,
+          date,
+          rawDate: s?.date || '',
+          startTime,
+          endTime,
+          memo: s?.memo || '',
+          uncertain,
+          isValid,
+        }
+      })
+
+      const defaultSelected = new Set(
+        candidates.filter((c) => c.isValid).map((c) => c.id)
+      )
+
+      setImageImportCandidates(candidates)
+      setImageImportSelected(defaultSelected)
+    } catch (error) {
+      console.error('이미지 분석 오류:', error)
+      setImageImportError(
+        `이미지 분석 중 오류가 발생했습니다: ${error?.message || '알 수 없는 오류'}`
+      )
+    } finally {
+      setImageImportIsAnalyzing(false)
+    }
+  }
+
+  const toggleImageCandidate = (id) => {
+    setImageImportSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const addManualCandidate = () => {
+    const id = `m-${Date.now()}-${imageImportIdRef.current++}`
+    const next = {
+      id,
+      date: '',
+      rawDate: '',
+      startTime: '',
+      endTime: '',
+      memo: '',
+      uncertain: false,
+      isValid: false,
+    }
+    setImageImportCandidates((prev) => [next, ...prev])
+    setImageImportSelected((prev) => {
+      const nextSet = new Set(prev)
+      nextSet.add(id)
+      return nextSet
+    })
+  }
+
+  const removeCandidate = (id) => {
+    setImageImportCandidates((prev) => prev.filter((c) => c.id !== id))
+    setImageImportSelected((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }
+
+  const updateImageCandidate = (id, field, value) => {
+    setImageImportCandidates((prev) =>
+      prev.map((c) => {
+        if (c.id !== id) return c
+        const next = { ...c, [field]: value }
+        next.isValid = Boolean(next.date && next.startTime && next.endTime)
+        return next
+      })
+    )
+  }
+
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
+
+  const resetImageView = () => {
+    setImageViewerZoom(1)
+    setImageViewerPan({ x: 0, y: 0 })
+  }
+
+  const zoomBy = (delta) => {
+    setImageViewerZoom((prev) => clamp(Math.round((prev + delta) * 10) / 10, 1, 4))
+  }
+
+  const handleImageWheel = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const direction = e.deltaY < 0 ? 1 : -1
+    zoomBy(direction * 0.1)
+  }
+
+  const handleImagePointerDown = (e) => {
+    if (e.button !== undefined && e.button !== 0) return
+    imageViewerRef.current.isPanning = true
+    imageViewerRef.current.pointerId = e.pointerId
+    imageViewerRef.current.startX = e.clientX
+    imageViewerRef.current.startY = e.clientY
+    imageViewerRef.current.originX = imageViewerPan.x
+    imageViewerRef.current.originY = imageViewerPan.y
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // ignore
+    }
+  }
+
+  const handleImagePointerMove = (e) => {
+    if (!imageViewerRef.current.isPanning) return
+    if (imageViewerRef.current.pointerId !== e.pointerId) return
+    const dx = e.clientX - imageViewerRef.current.startX
+    const dy = e.clientY - imageViewerRef.current.startY
+    setImageViewerPan({
+      x: imageViewerRef.current.originX + dx,
+      y: imageViewerRef.current.originY + dy,
+    })
+  }
+
+  const handleImagePointerUp = (e) => {
+    if (imageViewerRef.current.pointerId !== e.pointerId) return
+    imageViewerRef.current.isPanning = false
+    imageViewerRef.current.pointerId = null
+  }
+
+  const addImageSchedules = async () => {
+    setImageImportError('')
+    setImageImportResultMessage('')
+
+    if (activeWorkplaces.length === 0) {
+      setImageImportError('먼저 알바처를 등록해주세요.')
+      return
+    }
+    const selectedWorkplace = activeWorkplaces.find(
+      (w) => w.id === imageWorkplaceId
+    )
+    if (!selectedWorkplace) {
+      setImageImportError('등록할 알바처를 선택해주세요.')
+      return
+    }
+
+    const selectedCandidates = imageImportCandidates.filter((c) =>
+      imageImportSelected.has(c.id)
+    )
+    if (selectedCandidates.length === 0) {
+      setImageImportError('추가할 일정을 선택해주세요.')
+      return
+    }
+    const invalidSelected = selectedCandidates.filter(
+      (c) => !Boolean(c.date && c.startTime && c.endTime)
+    )
+    if (invalidSelected.length > 0) {
+      setImageImportError(
+        `선택한 일정 중 ${invalidSelected.length}개는 날짜/시간이 비어있습니다. 표에서 수정 후 다시 시도해주세요.`
+      )
+      return
+    }
+
+    setImageImportIsAdding(true)
+    try {
+      let failedCalendarCount = 0
+      let lastError = ''
+      for (const schedule of selectedCandidates) {
+        const result = await addSchedule({
+          workplaceId: selectedWorkplace.id,
+          date: schedule.date,
+          startTime: schedule.startTime,
+          endTime: schedule.endTime,
+          memo:
+            schedule.memo ||
+            (schedule.uncertain ? '(AI 분석 - 확인 필요)' : '(AI 분석)'),
+          source: 'image',
+        })
+        if (!result?.calendarSaved) {
+          failedCalendarCount += 1
+          lastError = result?.error || lastError
+        }
+      }
+
+      if (failedCalendarCount > 0) {
+        const errorText = lastError ? ` (오류: ${lastError})` : ''
+        setImageImportResultMessage(
+          `선택한 ${selectedCandidates.length}개 일정은 저장되었습니다. 다만 캘린더 추가가 ${failedCalendarCount}건 실패했습니다.${errorText}`
+        )
+      } else {
+        setImageImportResultMessage(
+          `선택한 ${selectedCandidates.length}개의 일정이 추가되었습니다.`
+        )
+      }
+    } finally {
+      setImageImportIsAdding(false)
+    }
+  }
+
+  const listMonthStart = new Date(
+    listMonth.getFullYear(),
+    listMonth.getMonth(),
+    1
+  )
+  const listMonthEnd = new Date(
+    listMonth.getFullYear(),
+    listMonth.getMonth() + 1,
+    0
+  )
+
+  const filteredSchedules = schedules.filter((schedule) =>
+    workplaceFilterId === 'all'
+      ? true
+      : schedule.workplaceId === workplaceFilterId
+  )
+
+  const visibleSchedules = filteredSchedules.filter((schedule) => {
     const date = new Date(schedule.date)
     return date >= listMonthStart && date <= listMonthEnd
   })
@@ -311,7 +579,7 @@ function ScheduleManager() {
           </div>
           <button
             type="button"
-            className="btn-secondary"
+            className="btn-secondary view-toggle-btn"
             onClick={() => setViewMode((prev) => (prev === 'list' ? 'calendar' : 'list'))}
           >
             {viewMode === 'list' ? '달력으로 보기' : '표 상태로 보기'}
@@ -328,6 +596,7 @@ function ScheduleManager() {
             <label className="btn-secondary upload-btn">
               📸 이미지 업로드
               <input
+                ref={imageInputRef}
                 type="file"
                 accept="image/*"
                 onChange={handleImageUpload}
@@ -338,11 +607,457 @@ function ScheduleManager() {
         )}
       </div>
 
-      {isAnalyzing && (
-        <div className="card">
-          <div className="analyzing-state">
-            <div className="spinner"></div>
-            <p>AI가 일정표를 분석하고 있습니다...</p>
+      <div className="list-filters">
+        <div className="input-group">
+          <label>필터</label>
+          <select
+            value={workplaceFilterId}
+            onChange={(e) => setWorkplaceFilterId(e.target.value)}
+          >
+            <option value="all">전체</option>
+            {workplaces.map((workplace) => (
+              <option key={workplace.id} value={workplace.id}>
+                {workplace.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {imageImportOpen && (
+        <div
+          className="schedule-modal-overlay"
+          onClick={closeImageImport}
+          role="presentation"
+        >
+          <div
+            className="schedule-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="schedule-modal-header">
+              <div>
+                <h2>이미지로 일정 등록</h2>
+                <p>안내 확인 → 설정 → 분석 → 선택 등록까지 한 번에 진행해요.</p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon schedule-modal-close"
+                onClick={closeImageImport}
+                aria-label="닫기"
+                title="닫기"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="schedule-modal-body">
+              <div className="schedule-modal-section">
+                <div className="schedule-modal-section-title">안내</div>
+                <ul className="schedule-modal-bullets">
+                  <li>AI가 읽은 결과는 틀릴 수 있어요. 등록 전에 꼭 확인해주세요.</li>
+                  <li>
+                    전체 일정표라면 본인 <strong>이름/닉네임</strong>이 이미지에 보여야 해요.
+                  </li>
+                  <li>
+                    <strong>(확인필요)</strong>로 표시된 일정은 특히 시간이 맞는지 확인이 필요해요.
+                  </li>
+                  <li>
+                    사진에 연도가 나와있지않은 경우 <strong>올해(2026)년으로 자동 보정</strong>
+                    합니다.
+                  </li>
+                </ul>
+                <div className="schedule-modal-analyze-mode">
+                  <div className="schedule-modal-analyze-mode-title">분석 방식</div>
+                  <label className="schedule-modal-radio">
+                    <input
+                      type="radio"
+                      name="analyzeMode"
+                      value="direct"
+                      checked={imageAnalyzeMode === 'direct'}
+                      onChange={() => setImageAnalyzeMode('direct')}
+                      disabled={imageImportIsAnalyzing || imageImportIsAdding}
+                    />
+                    기본(이미지 → 데이터 추출)
+                  </label>
+                  <label className="schedule-modal-radio">
+                    <input
+                      type="radio"
+                      name="analyzeMode"
+                      value="table"
+                      checked={imageAnalyzeMode === 'table'}
+                      onChange={() => setImageAnalyzeMode('table')}
+                      disabled={imageImportIsAnalyzing || imageImportIsAdding}
+                    />
+                    표 변환 후 추출(이미지 → 표 → 데이터)
+                  </label>
+                </div>
+              </div>
+
+              {imageImportPreviewUrl && (
+                <div className="schedule-modal-section">
+                  <div className="schedule-modal-section-title">업로드한 이미지</div>
+                  <div className="schedule-modal-image-toolbar">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => zoomBy(-0.2)}
+                      disabled={imageViewerZoom <= 1}
+                    >
+                      축소
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => zoomBy(0.2)}
+                      disabled={imageViewerZoom >= 4}
+                    >
+                      확대
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={resetImageView}
+                    >
+                      초기화
+                    </button>
+                    <span className="schedule-modal-image-zoom">
+                      {Math.round(imageViewerZoom * 100)}%
+                    </span>
+                    <span className="schedule-modal-image-hint">
+                      휠로 확대/축소, 드래그로 이동
+                    </span>
+                  </div>
+
+                  <div
+                    className="schedule-modal-image-wrapper"
+                    onWheelCapture={handleImageWheel}
+                  >
+                    <img
+                      className="schedule-modal-image"
+                      src={imageImportPreviewUrl}
+                      alt="업로드한 일정표"
+                      draggable={false}
+                      style={{
+                        transform: `translate(${imageViewerPan.x}px, ${imageViewerPan.y}px) scale(${imageViewerZoom})`,
+                      }}
+                      onPointerDown={handleImagePointerDown}
+                      onPointerMove={handleImagePointerMove}
+                      onPointerUp={handleImagePointerUp}
+                      onPointerCancel={handleImagePointerUp}
+                    />
+                  </div>
+                  <div className="schedule-modal-image-actions">
+                    <a
+                      className="schedule-modal-image-link"
+                      href={imageImportPreviewUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      새 창으로 크게 보기
+                    </a>
+                    {imageImportFile?.name ? (
+                      <span className="schedule-modal-image-meta">
+                        파일: {imageImportFile.name}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+
+              <div className="schedule-modal-grid">
+                <div className="input-group">
+                  <label>이름/닉네임 *</label>
+                  <input
+                    type="text"
+                    value={imageTargetName}
+                    onChange={(e) => setImageTargetName(e.target.value)}
+                    placeholder="예: 홍길동 / 길동 / Gildong"
+                    disabled={imageImportIsAnalyzing || imageImportIsAdding}
+                  />
+                  <div className="input-hint">
+                    전체 일정표일 경우 본인 이름이 정확히 매칭되어야 일정이 추출됩니다.
+                  </div>
+                </div>
+
+                <div className="input-group">
+                  <label>등록할 알바처 *</label>
+                  <select
+                    value={imageWorkplaceId}
+                    onChange={(e) => setImageWorkplaceId(e.target.value)}
+                    disabled={imageImportIsAnalyzing || imageImportIsAdding}
+                  >
+                    <option value="">선택하세요</option>
+                    {activeWorkplaces.map((workplace) => (
+                      <option key={workplace.id} value={workplace.id}>
+                        {workplace.name}
+                      </option>
+                    ))}
+                  </select>
+                  {activeWorkplaces.length === 0 && (
+                    <div className="schedule-modal-error">
+                      먼저 알바처를 등록해주세요.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="schedule-modal-divider" />
+
+              <div className="schedule-modal-section">
+                <div className="schedule-modal-section-title">분석 결과</div>
+
+                {imageImportIsAnalyzing && (
+                  <div className="analyzing-state">
+                    <div className="spinner"></div>
+                    <p>AI가 일정표를 분석하고 있습니다...</p>
+                  </div>
+                )}
+
+                {imageImportError && (
+                  <div className="schedule-modal-error">{imageImportError}</div>
+                )}
+
+                {imageImportResultMessage && (
+                  <div className="schedule-modal-success">
+                    {imageImportResultMessage}
+                  </div>
+                )}
+
+                {!imageImportIsAnalyzing && imageImportCandidates.length > 0 && (
+                  <div className="schedule-modal-results">
+                    <div className="schedule-modal-results-meta">
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={addManualCandidate}
+                        disabled={imageImportIsAnalyzing || imageImportIsAdding}
+                      >
+                        + 일정 추가
+                      </button>
+                      <span>
+                        찾은 일정: <strong>{imageImportCandidates.length}</strong>개
+                      </span>
+                      <span>
+                        선택됨:{' '}
+                        <strong>
+                          {
+                            imageImportCandidates.filter((c) =>
+                              imageImportSelected.has(c.id)
+                            ).length
+                          }
+                        </strong>
+                        개 (추가 가능:{' '}
+                        <strong>
+                          {
+                            imageImportCandidates.filter(
+                              (c) => imageImportSelected.has(c.id) && c.isValid
+                            ).length
+                          }
+                        </strong>
+                        개)
+                      </span>
+                    </div>
+
+                    <div className="schedule-modal-result-list">
+                      {imageImportCandidates.map((c, index) => {
+                        const disabled = imageImportIsAdding
+                        const checked = imageImportSelected.has(c.id)
+                        return (
+                          <label
+                            key={c.id}
+                            className={`schedule-modal-result-item ${
+                              disabled ? 'disabled' : ''
+                            } ${!c.isValid ? 'invalid' : ''}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={disabled}
+                              onChange={() => toggleImageCandidate(c.id)}
+                            />
+                            <div className="schedule-modal-result-text">
+                              <div className="schedule-modal-result-main">
+                                <span className="schedule-modal-result-index">
+                                  {index + 1}.
+                                </span>
+                                <button
+                                  type="button"
+                                  className="schedule-modal-row-delete"
+                                  onClick={(e) => {
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    removeCandidate(c.id)
+                                  }}
+                                  disabled={disabled}
+                                  title="이 행 삭제"
+                                >
+                                  삭제
+                                </button>
+                                {c.uncertain && (
+                                  <span className="schedule-modal-badge">
+                                    확인필요
+                                  </span>
+                                )}
+                                {!c.isValid && (
+                                  <span className="schedule-modal-badge warn">
+                                    누락됨
+                                  </span>
+                                )}
+                              </div>
+                              <div className="schedule-modal-review-grid">
+                                <div className="schedule-modal-review-field">
+                                  <span className="schedule-modal-review-label">
+                                    날짜
+                                  </span>
+                                  <input
+                                    type="date"
+                                    value={c.date || ''}
+                                    disabled={disabled}
+                                    onChange={(e) =>
+                                      updateImageCandidate(c.id, 'date', e.target.value)
+                                    }
+                                  />
+                                  {!c.date && c.rawDate ? (
+                                    <div className="schedule-modal-review-hint">
+                                      원본: {c.rawDate}
+                                    </div>
+                                  ) : null}
+                                </div>
+                                <div className="schedule-modal-review-field">
+                                  <span className="schedule-modal-review-label">
+                                    시작
+                                  </span>
+                                  <input
+                                    type="time"
+                                    value={c.startTime || ''}
+                                    disabled={disabled}
+                                    onChange={(e) =>
+                                      updateImageCandidate(
+                                        c.id,
+                                        'startTime',
+                                        e.target.value
+                                      )
+                                    }
+                                  />
+                                </div>
+                                <div className="schedule-modal-review-field">
+                                  <span className="schedule-modal-review-label">
+                                    종료
+                                  </span>
+                                  <input
+                                    type="time"
+                                    value={c.endTime || ''}
+                                    disabled={disabled}
+                                    onChange={(e) =>
+                                      updateImageCandidate(
+                                        c.id,
+                                        'endTime',
+                                        e.target.value
+                                      )
+                                    }
+                                  />
+                                </div>
+                                <div className="schedule-modal-review-field wide">
+                                  <span className="schedule-modal-review-label">
+                                    메모
+                                  </span>
+                                  <input
+                                    type="text"
+                                    value={c.memo || ''}
+                                    disabled={disabled}
+                                    placeholder="메모 (선택)"
+                                    onChange={(e) =>
+                                      updateImageCandidate(c.id, 'memo', e.target.value)
+                                    }
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </label>
+                        )
+                      })}
+                    </div>
+
+                    {(imageImportNotes ||
+                      imageImportTable ||
+                      imageImportModelInfo.usedModel ||
+                      imageImportModelInfo.availableModelsInfo) && (
+                      <div className="schedule-modal-ai-meta">
+                        {imageImportTable && (
+                          <div className="schedule-modal-ai-notes">
+                            <strong>AI 변환 표</strong>
+                            <pre className="schedule-modal-ai-table">
+                              {imageImportTable}
+                            </pre>
+                          </div>
+                        )}
+                        {imageImportNotes && (
+                          <div className="schedule-modal-ai-notes">
+                            <strong>AI 알림</strong>
+                            <div className="schedule-modal-ai-notes-text">
+                              {imageImportNotes}
+                            </div>
+                          </div>
+                        )}
+                        {(imageImportModelInfo.usedModel ||
+                          imageImportModelInfo.availableModelsInfo) && (
+                          <div className="schedule-modal-ai-model">
+                            {imageImportModelInfo.usedModel
+                              ? `사용 모델: ${imageImportModelInfo.usedModel}`
+                              : '사용 모델: 알 수 없음'}
+                            {imageImportModelInfo.availableModelsInfo
+                              ? ` |${imageImportModelInfo.availableModelsInfo}`
+                              : ''}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {!imageImportIsAnalyzing && imageImportCandidates.length === 0 && (
+                  <div className="schedule-modal-muted">
+                    아직 분석 결과가 없습니다. “분석 시작”을 눌러주세요.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="schedule-modal-footer">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={closeImageImport}
+                disabled={imageImportIsAnalyzing || imageImportIsAdding}
+              >
+                닫기
+              </button>
+
+              <div className="schedule-modal-footer-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={runImageAnalyze}
+                  disabled={imageImportIsAnalyzing || imageImportIsAdding}
+                >
+                  분석 시작
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={addImageSchedules}
+                  disabled={
+                    imageImportIsAnalyzing ||
+                    imageImportIsAdding ||
+                    imageImportCandidates.length === 0
+                  }
+                >
+                  {imageImportIsAdding ? '등록 중...' : '선택한 일정 추가'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -363,9 +1078,15 @@ function ScheduleManager() {
                 required
               >
                 <option value="">선택하세요</option>
-                {workplaces.map((workplace) => (
+                {(editingId
+                  ? workplaces
+                  : activeWorkplaces
+                ).map((workplace) => (
                   <option key={workplace.id} value={workplace.id}>
                     {workplace.name}
+                    {(workplace.employmentStatus || 'active') === 'retired'
+                      ? ' (퇴사)'
+                      : ''}
                   </option>
                 ))}
               </select>
@@ -574,6 +1295,22 @@ function ScheduleManager() {
               )
             })}
           </div>
+          {schedules.length === 0 ? (
+            <div className="empty-state">
+              <p>등록된 근무 일정이 없습니다.</p>
+              <p className="empty-hint">
+                수동으로 추가하거나 이미지를 업로드해보세요.
+              </p>
+            </div>
+          ) : filteredSchedules.length === 0 ? (
+            <div className="empty-state">
+              <p>선택한 알바처에 근무 일정이 없습니다.</p>
+            </div>
+          ) : visibleSchedules.length === 0 ? (
+            <div className="empty-state">
+              <p>선택한 월에 근무 일정이 없습니다.</p>
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="schedules-list">
@@ -586,9 +1323,7 @@ function ScheduleManager() {
             >
               &lt;
             </button>
-            <div className="list-month-label">
-              {`${listMonth.getMonth() + 1}월`}
-            </div>
+            <div className="list-month-label">{formatMonthLabel(listMonth)}</div>
             <button
               type="button"
               className="btn-secondary"
@@ -605,6 +1340,10 @@ function ScheduleManager() {
               <p className="empty-hint">
                 수동으로 추가하거나 이미지를 업로드해보세요.
               </p>
+            </div>
+          ) : filteredSchedules.length === 0 ? (
+            <div className="empty-state">
+              <p>선택한 알바처에 근무 일정이 없습니다.</p>
             </div>
           ) : visibleSchedules.length === 0 ? (
             <div className="empty-state">
@@ -726,12 +1465,14 @@ function normalizeImageScheduleDate(value) {
 
   const fullMatch = trimmed.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/)
   if (fullMatch) {
-    return formatDateParts(currentYear, fullMatch[2], fullMatch[3])
+    return formatDateParts(fullMatch[1], fullMatch[2], fullMatch[3])
   }
 
   const shortYearMatch = trimmed.match(/^(\d{2})[-/.](\d{1,2})[-/.](\d{1,2})$/)
   if (shortYearMatch) {
-    return formatDateParts(currentYear, shortYearMatch[2], shortYearMatch[3])
+    // "24-01-05" 같은 2자리 연도는 20xx로 해석 (이미지에 연도가 없으면 yyyy-MM-DD로 오도록 유도)
+    const year = 2000 + Number(shortYearMatch[1])
+    return formatDateParts(year, shortYearMatch[2], shortYearMatch[3])
   }
 
   const shortMatch = trimmed.match(/^(\d{1,2})[-/.](\d{1,2})$/)

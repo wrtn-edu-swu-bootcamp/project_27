@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useWorkplaceStore } from '../store/workplaceStore'
+import { useScheduleStore } from '../store/scheduleStore'
 import { getAllowanceQnA } from '../api/gemini'
 import './WorkplaceManager.css'
 
@@ -20,9 +21,11 @@ const MINIMUM_WAGE_BY_YEAR = {
 function WorkplaceManager() {
   const { workplaces, addWorkplace, updateWorkplace, deleteWorkplace } =
     useWorkplaceStore()
+  const { deleteSchedulesByWorkplaceId } = useScheduleStore()
   const [isAdding, setIsAdding] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [formData, setFormData] = useState(getEmptyForm())
+  const [isRetiredDrawerOpen, setIsRetiredDrawerOpen] = useState(false)
   const [allowanceQuestion, setAllowanceQuestion] = useState('')
   const [allowanceAnswer, setAllowanceAnswer] = useState('')
   const [allowanceModelName, setAllowanceModelName] = useState('')
@@ -37,6 +40,7 @@ function WorkplaceManager() {
     return {
       name: '',
       hourlyWage: '',
+      employmentStatus: 'active',
       breakType: breakDefaults.breakType,
       breakEveryHours: breakDefaults.breakEveryHours,
       breakMinutesPerBlock: breakDefaults.breakMinutesPerBlock,
@@ -177,6 +181,7 @@ function WorkplaceManager() {
     const workplace = {
       ...formData,
       hourlyWage: Number(formData.hourlyWage),
+      employmentStatus: formData.employmentStatus || 'active',
       breakType: formData.breakType,
       breakEveryHours: Number(formData.breakEveryHours || 0),
       breakMinutesPerBlock: Number(formData.breakMinutesPerBlock || 0),
@@ -207,6 +212,7 @@ function WorkplaceManager() {
       taxType: normalizeTaxType(workplace),
       insuranceSettings: insuranceDefaults,
       settings: normalizeSettings(workplace.settings || {}),
+      employmentStatus: workplace.employmentStatus || 'active',
     })
     setEditingId(workplace.id)
     setIsAdding(true)
@@ -217,8 +223,24 @@ function WorkplaceManager() {
   }
 
   const handleDelete = async (id) => {
-    if (confirm('이 알바처를 삭제하시겠습니까?')) {
-      await deleteWorkplace(id)
+    const confirmText =
+      '정말 삭제하시겠습니까?\n' +
+      '삭제 하시면 해당 알바처의 모든 근무 기록이 사라지게 됩니다.\n' +
+      '퇴사의 경우 퇴사 상태로 변경하여 주십시오.'
+
+    if (!confirm(confirmText)) return
+
+    await deleteSchedulesByWorkplaceId(id)
+    await deleteWorkplace(id)
+    if (editingId === id) {
+      handleCancel()
+    }
+  }
+
+  const handleRetireToggle = async (id, nextStatus) => {
+    await updateWorkplace(id, { employmentStatus: nextStatus })
+    if (editingId === id) {
+      setFormData((prev) => ({ ...prev, employmentStatus: nextStatus }))
     }
   }
 
@@ -284,6 +306,17 @@ function WorkplaceManager() {
     return Boolean(setting?.supported && setting?.userConfirmed)
   }
 
+  const activeWorkplaces = useMemo(
+    () =>
+      workplaces.filter((wp) => (wp.employmentStatus || 'active') !== 'retired'),
+    [workplaces]
+  )
+  const retiredWorkplaces = useMemo(
+    () =>
+      workplaces.filter((wp) => (wp.employmentStatus || 'active') === 'retired'),
+    [workplaces]
+  )
+
   return (
     <div className="workplace-manager">
       <div className="page-header">
@@ -303,6 +336,22 @@ function WorkplaceManager() {
             <h2>{editingId ? '알바처 수정' : '새 알바처 추가'}</h2>
           </div>
           <form onSubmit={handleSubmit}>
+            <div className="input-group">
+              <label>재직 상태</label>
+              <select
+                value={formData.employmentStatus || 'active'}
+                onChange={(e) =>
+                  setFormData({ ...formData, employmentStatus: e.target.value })
+                }
+              >
+                <option value="active">재직중</option>
+                <option value="retired">퇴사</option>
+              </select>
+              <div className="input-hint">
+                퇴사로 변경하면 기본 목록에서 숨겨지고, 우측 하단 서랍에서 확인할 수 있어요.
+              </div>
+            </div>
+
             <div className="input-group">
               <label>알바처 이름 *</label>
               <input
@@ -773,21 +822,26 @@ function WorkplaceManager() {
 
       {/* 알바처 목록 */}
       <div className="workplace-list-section">
-        {workplaces.length === 0 ? (
+        {activeWorkplaces.length === 0 ? (
           <div className="empty-state">
-            <p>등록된 알바처가 없습니다.</p>
-            <p className="empty-hint">첫 알바처를 추가해보세요.</p>
+            <p>재직중인 알바처가 없습니다.</p>
+            <p className="empty-hint">
+              새 알바처를 추가하거나, 우측 하단 서랍에서 퇴사한 알바처를 확인하세요.
+            </p>
           </div>
         ) : (
           <div className="workplace-grid">
-            {workplaces.map((workplace) => (
+            {activeWorkplaces.map((workplace) => (
               <div key={workplace.id} className="workplace-card">
                 <div className="workplace-card-header">
                   <div
                     className="workplace-color-big"
                     style={{ backgroundColor: workplace.color }}
                   />
-                  <h3>{workplace.name}</h3>
+                  <div className="workplace-title-row">
+                    <h3>{workplace.name}</h3>
+                    <span className="employment-badge active">재직중</span>
+                  </div>
                 </div>
                 <div className="workplace-card-body">
                   <div className="info-row">
@@ -832,6 +886,12 @@ function WorkplaceManager() {
                     수정
                   </button>
                   <button
+                    className="btn-retire"
+                    onClick={() => handleRetireToggle(workplace.id, 'retired')}
+                  >
+                    퇴사
+                  </button>
+                  <button
                     className="btn-delete"
                     onClick={() => handleDelete(workplace.id)}
                   >
@@ -842,6 +902,84 @@ function WorkplaceManager() {
             ))}
           </div>
         )}
+      </div>
+
+      {/* 퇴사 서랍 버튼 */}
+      <button
+        type="button"
+        className="retired-drawer-fab"
+        onClick={() => setIsRetiredDrawerOpen(true)}
+        aria-label="퇴사한 알바처 서랍 열기"
+      >
+        퇴사 목록 {retiredWorkplaces.length}
+      </button>
+
+      {isRetiredDrawerOpen && (
+        <div
+          className="retired-drawer-overlay"
+          onClick={() => setIsRetiredDrawerOpen(false)}
+        >
+          <div
+            className="retired-drawer"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="retired-drawer-header">
+              <h3>퇴사한 알바처</h3>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setIsRetiredDrawerOpen(false)}
+              >
+                닫기
+              </button>
+            </div>
+
+            {retiredWorkplaces.length === 0 ? (
+              <div className="empty-state">
+                <p>퇴사한 알바처가 없습니다.</p>
+              </div>
+            ) : (
+              <div className="retired-list">
+                {retiredWorkplaces.map((workplace) => (
+                  <button
+                    key={workplace.id}
+                    type="button"
+                    className="retired-item"
+                    onClick={() => {
+                      setIsRetiredDrawerOpen(false)
+                      handleEdit(workplace)
+                    }}
+                  >
+                    <span
+                      className="retired-color"
+                      style={{ backgroundColor: workplace.color }}
+                    />
+                    <span className="retired-name">{workplace.name}</span>
+                    <span className="retired-badge">퇴사</span>
+                    <button
+                      type="button"
+                      className="btn-secondary retired-restore-btn"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleRetireToggle(workplace.id, 'active')
+                      }}
+                    >
+                      재직으로
+                    </button>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="retire-info bottom">
+        <span className="warning-icon" aria-hidden="true">
+          ⚠️
+        </span>{' '}
+        삭제 하시면 해당 알바처의 모든 근무 기록이 사라지게 됩니다. 퇴사의 경우 퇴사 상태로
+        변경하여 주십시오.
       </div>
     </div>
   )
